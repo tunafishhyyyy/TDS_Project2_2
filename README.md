@@ -247,3 +247,26 @@ TDS_Project2_2/
 - [OpenAI API Documentation](https://platform.openai.com/docs)
 - [FastAPI Documentation](https://fastapi.tiangolo.com/)
 - [DuckDB Documentation](https://duckdb.org/docs/)
+
+### Managing Docker Containers
+
+#### Start the Container
+```bash
+docker-compose up -d
+```
+
+#### Stop the Container
+```bash
+docker-compose down
+```
+
+#### Check Logs
+```bash
+docker logs llm_orchestrator
+```
+
+#### Update Code and Restart
+```bash
+git pull origin main
+docker-compose down && docker-compose up -d
+```
