@@ -90,7 +90,7 @@ def fetch_web(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": str(e), "data": None}
 
 
-def _scrape_url(url: str, selectors: Dict[str, str],
+def _scrape_url(url: str, selectors: Dict[str, str], 
                 headers: Dict[str, str], timeout: int) -> Dict[str, Any]:
     """Scrape data from a specific URL"""
     try:
@@ -107,28 +107,22 @@ def _scrape_url(url: str, selectors: Dict[str, str],
                 if len(elements) == 1:
                     extracted_data[key] = elements[0].get_text(strip=True)
                 else:
-                    extracted_data[key] = [
-                        el.get_text(strip=True) for el in elements
-                    ]
+                    extracted_data[key] = [el.get_text(strip=True) 
+                                         for el in elements]
             else:
                 extracted_data[key] = None
         
         # If no selectors provided, try to extract tables automatically
         if not selectors:
-            # Try to extract tables first (useful for Wikipedia)
+            # Try to extract tables first (useful for Wikipedia and similar sites)
             tables_data = _extract_tables(soup)
             
-            title_elem = soup.find("title")
-            title = title_elem.get_text(strip=True) if title_elem else ""
-            
             extracted_data = {
-                "title": title,
+                "title": soup.find("title").get_text(strip=True) if soup.find("title") else "",
                 "tables": tables_data,
                 "text_content": soup.get_text()[:1000] + "...",
-                "links": [
-                    urljoin(url, a.get("href", ""))
-                    for a in soup.find_all("a", href=True)
-                ][:10]
+                "links": [urljoin(url, a.get("href", "")) 
+                         for a in soup.find_all("a", href=True)][:10]
             }
         
         return {

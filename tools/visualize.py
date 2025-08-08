@@ -14,25 +14,27 @@ from app.logger import logger
 
 def visualize(params: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Create data visualizations
+    Create visualizations from data
     
     Args:
         params: {
-            "chart_type": str - "bar", "line", "scatter", "histogram", "pie", "heatmap"
             "data": list/dict - input data
+            "plot_type": str - "bar", "line", "scatter", "histogram", etc.
             "x": str - x-axis column
             "y": str - y-axis column
-            "color": str - color grouping column
-            "title": str - chart title
-            "engine": str - "matplotlib" or "plotly"
-            "output_format": str - "base64", "html", "json"
-            "width": int - chart width
-            "height": int - chart height
+            "title": str - plot title
+            "output_format": str - "json", "html", "data_uri"
+            "engine": str - "plotly", "matplotlib"
+            "regression": bool - add regression line for scatter plots
+            "line_style": str - line style for regression
+            "line_color": str - line color for regression
+            "max_bytes": int - max size for data URI
         }
     """
     try:
         data = params.get("data")
-        chart_type = params.get("chart_type", "bar")
+        plot_type = params.get("plot_type", "bar")
+        output_format = params.get("output_format", "json")
         engine = params.get("engine", "plotly")
         
         if not data:
@@ -43,17 +45,38 @@ def visualize(params: Dict[str, Any]) -> Dict[str, Any]:
             df = pd.DataFrame(data)
         elif isinstance(data, pd.DataFrame):
             df = data
+        elif isinstance(data, dict):
+            # Handle different dict formats
+            if 'data' in data:
+                try:
+                    df = pd.DataFrame(data['data'])
+                except Exception as e:
+                    logger.error(f"Cannot convert input['data'] to DataFrame: {data['data']}")
+                    raise
+            else:
+                try:
+                    df = pd.DataFrame(data)
+                except Exception as e:
+                    raise ValueError(f"Cannot convert dict to DataFrame: {data}")
         else:
             raise ValueError(f"Unsupported data type: {type(data)}")
         
-        logger.info(f"Creating {chart_type} chart with {engine} engine")
+        logger.info(f"Creating {plot_type} chart with {engine} engine")
         
-        if engine == "plotly":
-            return _create_plotly_chart(df, params)
-        elif engine == "matplotlib":
-            return _create_matplotlib_chart(df, params)
+        if engine == "plotly" and plot_type == "scatter":
+            try:
+                return _create_plotly_chart(df, params)
+            except Exception as e:
+                logger.warning(f"Plotly failed: {e}. Falling back to matplotlib")
+                return _create_matplotlib_chart(df, params)
+        elif engine == "plotly":
+            try:
+                return _create_plotly_chart(df, params)
+            except Exception as e:
+                logger.warning(f"Plotly failed: {e}. Falling back to matplotlib")
+                return _create_matplotlib_chart(df, params)
         else:
-            raise ValueError(f"Unknown engine: {engine}")
+            return _create_matplotlib_chart(df, params)
     
     except Exception as e:
         logger.error(f"Visualization failed: {str(e)}")
@@ -160,6 +183,25 @@ def _create_plotly_chart(df: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, 
                 }
             }
         
+        elif output_format == "data_uri":
+            # Export plotly figure to PNG and encode as data URI
+            import io, base64
+            try:
+                img_bytes = fig.to_image(format="png")
+                b64 = base64.b64encode(img_bytes).decode("utf-8")
+                data_uri = f"data:image/png;base64,{b64}"
+                return {
+                    "status": "success",
+                    "data": data_uri,
+                    "metadata": {
+                        "chart_type": chart_type,
+                        "engine": "plotly",
+                        "format": "data_uri"
+                    }
+                }
+            except Exception:
+                # Fallback to matplotlib if kaleido not available
+                return _create_matplotlib_chart(df, params)
         else:
             raise ValueError(f"Unsupported output format: {output_format}")
     
@@ -201,8 +243,8 @@ def _create_matplotlib_chart(df: pd.DataFrame, params: Dict[str, Any]) -> Dict[s
                 plt.scatter(df[x], df[y], alpha=0.6)
                 
                 # Add regression line if requested
-                add_regression = params.get("add_regression", False)
-                if add_regression:
+                regression = params.get("regression", False)
+                if regression:
                     # Calculate regression line
                     x_vals = df[x].dropna()
                     y_vals = df[y].dropna()
@@ -218,8 +260,14 @@ def _create_matplotlib_chart(df: pd.DataFrame, params: Dict[str, Any]) -> Dict[s
                         regression_line = np.polyval(coeffs, x_clean)
                         
                         # Plot regression line
-                        linestyle = params.get("regression_style", "--")
-                        color = params.get("regression_color", "red")
+                        linestyle = params.get("line_style", "dotted")
+                        # Convert dotted to dashed for matplotlib
+                        if linestyle == "dotted":
+                            linestyle = ":"
+                        elif linestyle == "dashed":
+                            linestyle = "--"
+                        
+                        color = params.get("line_color", "red")
                         plt.plot(x_clean, regression_line, 
                                linestyle=linestyle, color=color, 
                                label=f'Regression Line (slope={coeffs[0]:.3f})')

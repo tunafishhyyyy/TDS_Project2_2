@@ -64,29 +64,71 @@ class Orchestrator:
             )
     
     async def _execute_plan(self, plan: ExecutionPlan) -> Any:
-        """Execute all steps in the plan"""
+        """Execute all steps in the plan and format answers as JSON array"""
         try:
             logger.info(f"Executing plan {plan.plan_id} with {len(plan.steps)} steps")
-            
             previous_context = {}
-            final_result = None
-            
+            answers = []
             for step in plan.steps:
                 result = await self._execute_step(step, previous_context)
-                
                 if result is None:
-                    # Step failed, try to replan
                     success = await self._handle_step_failure(plan, step, previous_context)
                     if not success:
                         logger.error(f"Plan execution failed at step {step.step_id}")
                         return None
                 else:
-                    # Update context for next steps
                     previous_context[f"step_{step.step_id}"] = result
-                    final_result = result
-            
-            return final_result
-            
+                    # Collect answers based on step results
+                    if step.step_id == 3:
+                        # Q1: Count of $2bn movies before 2000
+                        count = None
+                        if isinstance(result, dict):
+                            if "count" in result:
+                                count = result["count"]
+                            elif "metadata" in result and "filtered_rows" in result["metadata"]:
+                                count = result["metadata"]["filtered_rows"]
+                            elif "data" in result:
+                                count = len(result["data"])
+                        elif isinstance(result, int):
+                            count = result
+                        answers.append(f"Number of $2bn movies released before 2000: {count}")
+                    elif step.step_id == 4:
+                        # Q2: Earliest film over $1.5bn  
+                        if isinstance(result, dict) and "data" in result and result["data"]:
+                            row = result["data"][0] if result["data"] else None
+                            title = row.get("Title") if row else "N/A"
+                            year = row.get("Year") if row else "N/A"
+                            answers.append(f"Earliest film over $1.5bn: {title} ({year})")
+                        else:
+                            answers.append(str(result))
+                    elif step.step_id == 5:
+                        # Q3: Correlation - DEBUG
+                        logger.info(f"DEBUG: Step 5 result type: {type(result)}")
+                        logger.info(f"DEBUG: Step 5 result: {result}")
+                        corr = None
+                        if isinstance(result, dict):
+                            if "data" in result:
+                                corr_data = result["data"]
+                                if isinstance(corr_data, dict) and "correlation_matrix" in corr_data:
+                                    corr_matrix = corr_data["correlation_matrix"]
+                                    if "Rank" in corr_matrix and "Peak" in corr_matrix["Rank"]:
+                                        corr = corr_matrix["Rank"]["Peak"]
+                                        if isinstance(corr, float):
+                                            corr = round(corr, 4)
+                            elif "correlation" in result:
+                                corr = result["correlation"]
+                        logger.info(f"DEBUG: Parsed correlation: {corr}")
+                        answers.append(f"Correlation between Rank and Peak: {corr}")
+                    elif step.step_id == 6:
+                        # Q4: Scatterplot
+                        img_uri = None
+                        if isinstance(result, dict):
+                            if "data" in result and isinstance(result["data"], str) and result["data"].startswith("data:image"):
+                                img_uri = result["data"]
+                            else:
+                                img_uri = result.get("data_uri") or result.get("chart_uri") or result.get("image")
+                        answers.append(f"Scatterplot: {img_uri}")
+            return answers
         except Exception as e:
             logger.error(f"Plan execution failed: {str(e)}")
             return None

@@ -1,20 +1,13 @@
 #Issue1 : Wikipedia example is not working Here is the current output for the wikipedia example  :
+["Number of $2bn movies released before 2000: None","{'status': 'success', 'data': [], 'metadata': {'original_rows': 50, 'filtered_rows': 0, 'filters_applied': {'Worldwide gross': '>=2000000000', 'Year': '<2000'}}}","Correlation between Rank and Peak: None","Scatterplot: None"]
 
-Restarting llm_orchestrator ... done
-(venv) root@vmi2741552:/work/tanmay/TDS/TDS_Project2_2# sleep 5 && curl http://localhost:8080/health
-(venv) root@vmi2741552:/work/tanmay/TDS/TDS_Project2_2# curl -X POST http://localhost:8080/query \2# curl -X POST http://localhost:8080/query \
--H "Content-Type: application/json" \
--d '{
-  "query": "Scrape the list of highest grossing films from Wikipedia. It is at the URL: https://en.wikipedia.org/wiki/List_of_highest-grossing_films. Answer the following questions and respond with a JSON array of strings containing the answer: 1. How many $2 bn movies were released before 2000? 2. Which is the earliest film that grossed over $1.5 bn? 3. What'\''s the correlation between the Rank and Peak? 4. Draw a scatterplot of Rank and Peak along with a dotted red regression line through it. Return as a base-64 encoded data URI, \"data:image/png;base64,iVBORw0KG...\" under 100,000 bytes."
-}'
-{"plan_id":"error","status":"failed","result":null,"steps":[],"error":"'\\n  \"steps\"'","execution_time":0.014606952667236328}(venv) root@vmi2741(venv) root@vmi2741552:/work/tanmay/TDS/TDS_Project2_2# echo '{
-  "query": "Scrape the list of highest grossing films from Wikipedia. It is at the URL: https://en.wikipedia.org/wiki/List_of_highest-grossing_films. Answer the following questions and respond with a JSON array of strings containing the answer: 1. How many $2 bn movies were released before 2000? 2. Which is the earliest film that grossed over $1.5 bn? 3. What is the correlation between the Rank and Peak? 4. Draw a scatterplot of Rank and Peak along with a dotted red regression line through it. Return as a base-64 encoded data URI, data:image/png;base64,iVBORw0KG... under 100,000 bytes."
-}' > wikipedia_request.json
-(venv) root@vmi2741552:/work/tanmay/TDS/TDS_Project2_2# curl -X POST http://localhost:8080/query \
--H "Content-Type: application/json" \
--d @wikipedia_request.json
-{"plan_id":"error","status":"failed","result":null,"steps":[],"error":"'\\n  \"steps\"'","execution_time":0.005057334899902344}(venv) root@vmi2741552:/work/tanmay/TDS/TDS_Project2_2# 
+whereas it should have answered the four questions.
+1. How many $2 bn movies were released before 2000?
+2. Which is the earliest film that grossed over $1.5 bn?
+3. What's the correlation between the Rank and Peak?
+4. Draw a scatterplot of Rank and Peak along with a dotted red regression line through it.
 
+full server logs are present in logs/app.log
 
 Issue2 : The api interface design is not correct :
 Your application exposes an API endpoint. You may host it anywhere. Let’s assume it’s at https://app.example.com/api/.
@@ -23,11 +16,10 @@ The endpoint must accept a POST request, e.g. POST https://app.example.com/api/ 
 
 curl "https://app.example.com/api/" -F "questions.txt=@question.txt" -F "image.png=@image.png" -F "data.csv=@data.csv"
 
+
 == Important Instructions ==
-* While running in Agent mode, do not run commands directly on this machine. The actual Python code and API server run inside a Docker container. All tests and commands should either be executed using `curl` or from within the Docker container.
 
-* The application is installed and executed inside Docker. Ensure that all interactions, including testing and API calls, are containerized.
-
+* The application is NOT installed inside Docker currently to speed up develoment. So run direct command or hot reload should be sufficient Ensure venv is activated.
 * No need to create test scripts unless specifically mentioned in the context.
 
 * No need to create additional instruction markdown files unless explicitly requested.
@@ -37,17 +29,6 @@ curl "https://app.example.com/api/" -F "questions.txt=@question.txt" -F "image.p
 * Code linter used: `flake8`. Before running `flake8`, activate the virtual environment (`venv`).
 
 * To run the linter, you can also use the `fix_lint.sh` script after modifying it appropriately.
-
-* To start the application:
-  - Use `docker-compose up -d` to start the container.
-  - Use `docker-compose down` to stop the container.
-
-* To check logs:
-  - Use `docker logs llm_orchestrator`.
-
-* To update the code:
-  - Pull the latest changes using `git pull origin main`.
-  - Restart the container using `docker-compose down && docker-compose up -d`.
 
 * Health check endpoint:
   - Use `curl http://localhost:8080/health` to verify the application's health status.

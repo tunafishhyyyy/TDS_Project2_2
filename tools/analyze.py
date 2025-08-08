@@ -54,10 +54,17 @@ def analyze(params: Dict[str, Any]) -> Dict[str, Any]:
                     raise ValueError("No tables found in data")
             else:
                 # Try to convert dict directly to DataFrame
-                try:
-                    df = pd.DataFrame(data)
-                except Exception as e:
-                    raise ValueError(f"Cannot convert dict to DataFrame: {data}")
+                    if 'data' in data:
+                        try:
+                            df = pd.DataFrame(data['data'])
+                        except Exception as e:
+                            logger.error(f"Cannot convert input['data'] to DataFrame: {data['data']}")
+                            raise
+                    else:
+                        try:
+                            df = pd.DataFrame(data)
+                        except Exception as e:
+                            raise ValueError(f"Cannot convert dict to DataFrame: {data}")
         else:
             raise ValueError(f"Unsupported data type: {type(data)}")
         
@@ -73,6 +80,18 @@ def analyze(params: Dict[str, Any]) -> Dict[str, Any]:
             return _filter_data(df, params)
         elif operation == "transform":
             return _transform_data(df, params)
+        elif operation == "cleaning":
+            cleaning = params.get("cleaning", {})
+            cleaned_df = df.copy()
+            for col, rule in cleaning.items():
+                if col in cleaned_df.columns:
+                    if "remove non-numeric" in rule:
+                        cleaned_df[col] = cleaned_df[col].astype(str).str.replace(r"[^\d.]", "", regex=True)
+                    if "convert to float" in rule:
+                        cleaned_df[col] = pd.to_numeric(cleaned_df[col], errors="coerce")
+                    if "convert to int" in rule:
+                        cleaned_df[col] = pd.to_numeric(cleaned_df[col], errors="coerce").astype('Int64')
+            return {"status": "success", "data": cleaned_df.to_dict("records"), "columns": list(cleaned_df.columns)}
         else:
             raise ValueError(f"Unknown operation: {operation}")
     
@@ -196,18 +215,56 @@ def _filter_data(df: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, Any]:
                 logger.warning(f"Column {column} not found, skipping filter")
                 continue
             
+            # Clean numeric data if needed
+            if column == "Worldwide gross":
+                # Clean the currency values: remove prefixes like 'T', '$', ',' and convert to numeric
+                filtered_df[column] = filtered_df[column].astype(str)
+                # Remove prefixes like 'T', 'A', etc. and clean currency formatting
+                filtered_df[column] = filtered_df[column].str.replace(r'^[A-Z]+', '', regex=True)
+                filtered_df[column] = filtered_df[column].str.replace(r'[\$,]', '', regex=True)
+                # Extract just the first number if there are multiple values separated by space/parentheses
+                filtered_df[column] = filtered_df[column].str.extract(r'([\d.]+)')[0]
+                filtered_df[column] = pd.to_numeric(filtered_df[column], errors='coerce')
+            
             if isinstance(condition, dict):
                 # Complex conditions
                 if "gt" in condition:
                     filtered_df = filtered_df[filtered_df[column] > condition["gt"]]
+                if "gte" in condition:
+                    filtered_df = filtered_df[filtered_df[column] >= condition["gte"]]
                 if "lt" in condition:
                     filtered_df = filtered_df[filtered_df[column] < condition["lt"]]
+                if "lte" in condition:
+                    filtered_df = filtered_df[filtered_df[column] <= condition["lte"]]
                 if "eq" in condition:
                     filtered_df = filtered_df[filtered_df[column] == condition["eq"]]
                 if "in" in condition:
                     filtered_df = filtered_df[filtered_df[column].isin(condition["in"])]
                 if "contains" in condition:
                     filtered_df = filtered_df[filtered_df[column].str.contains(condition["contains"], na=False)]
+            elif isinstance(condition, str):
+                # String-based filtering for complex conditions like ">=2000000000"
+                if condition.startswith(">="):
+                    value = float(condition[2:])
+                    filtered_df = filtered_df[filtered_df[column] >= value]
+                elif condition.startswith("<="):
+                    value = float(condition[2:])
+                    filtered_df = filtered_df[filtered_df[column] <= value]
+                elif condition.startswith(">"):
+                    value = float(condition[1:])
+                    filtered_df = filtered_df[filtered_df[column] > value]
+                elif condition.startswith("<"):
+                    value = float(condition[1:])
+                    filtered_df = filtered_df[filtered_df[column] < value]
+                elif condition.startswith("=="):
+                    value = float(condition[2:])
+                    filtered_df = filtered_df[filtered_df[column] == value]
+                else:
+                    # String equality or contains
+                    if filtered_df[column].dtype == 'object':
+                        filtered_df = filtered_df[filtered_df[column].str.contains(str(condition), na=False)]
+                    else:
+                        filtered_df = filtered_df[filtered_df[column] == condition]
             else:
                 # Simple equality
                 filtered_df = filtered_df[filtered_df[column] == condition]
@@ -215,6 +272,7 @@ def _filter_data(df: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "status": "success",
             "data": filtered_df.to_dict("records"),
+            "count": len(filtered_df),
             "metadata": {
                 "original_rows": len(df),
                 "filtered_rows": len(filtered_df),
