@@ -1,0 +1,5 @@
+{
+  "github.copilot.advanced": {
+    "instructionsFile": ".github/copilot-instructions.md"
+  }
+}

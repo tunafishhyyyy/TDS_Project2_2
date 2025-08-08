@@ -1,0 +1,34 @@
+
+
+
+
+== Important Instructions ==
+* While running in Agent mode, do not run commands directly on this machine. The actual Python code and API server run inside a Docker container. All tests and commands should either be executed using `curl` or from within the Docker container.
+
+* The application is installed and executed inside Docker. Ensure that all interactions, including testing and API calls, are containerized.
+
+* No need to create test scripts unless specifically mentioned in the context.
+
+* No need to create additional instruction markdown files unless explicitly requested.
+
+* These are not the final questions for evaluation. The examples provided are indicative. Ensure that data scraping and prompts are generic and adaptable to any table or use case.
+
+* Code linter used: `flake8`. Before running `flake8`, activate the virtual environment (`venv`).
+
+* To run the linter, you can also use the `fix_lint.sh` script after modifying it appropriately.
+
+* To start the application:
+  - Use `docker-compose up -d` to start the container.
+  - Use `docker-compose down` to stop the container.
+
+* To check logs:
+  - Use `docker logs llm_orchestrator`.
+
+* To update the code:
+  - Pull the latest changes using `git pull origin main`.
+  - Restart the container using `docker-compose down && docker-compose up -d`.
+
+* Health check endpoint:
+  - Use `curl http://localhost:8080/health` to verify the application's health status.
+
+* Ensure that `.env` is properly configured with all required API keys and environment variables before starting the application.
