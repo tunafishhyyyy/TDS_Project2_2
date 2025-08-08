@@ -2,6 +2,7 @@
 LLM Client for direct OpenAI API calls
 """
 import json
+import re
 from typing import Dict, Any, Optional, List
 from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -31,6 +32,7 @@ class LLMClient:
     ) -> str:
         """Generate completion from OpenAI API"""
         try:
+            # Enable JSON mode if requested
             response_format = {"type": "json_object"} if json_mode else None
             
             response = self.client.chat.completions.create(
@@ -38,7 +40,7 @@ class LLMClient:
                 messages=messages,
                 temperature=temperature or self.temperature,
                 max_tokens=max_tokens or self.max_tokens,
-                response_format=response_format
+                response_format=response_format  # Pass response format
             )
             
             content = response.choices[0].message.content
@@ -60,34 +62,84 @@ class LLMClient:
             response_text = self.generate_completion(
                 messages=messages,
                 temperature=temperature,
-                json_mode=False  # Disable JSON mode for compatibility
+                json_mode=False  # Disable JSON mode for better compatibility
             )
             
-            # Try to extract JSON from markdown code blocks or clean up
-            cleaned_text = response_text.strip()
-            
-            # Remove markdown code blocks if present
-            if cleaned_text.startswith("```json"):
-                cleaned_text = cleaned_text[7:]  # Remove ```json
-                if cleaned_text.endswith("```"):
-                    cleaned_text = cleaned_text[:-3]  # Remove trailing ```
-            elif cleaned_text.startswith("```"):
-                cleaned_text = cleaned_text[3:]  # Remove ```
-                if cleaned_text.endswith("```"):
-                    cleaned_text = cleaned_text[:-3]  # Remove trailing ```
-            
-            cleaned_text = cleaned_text.strip()
-            
-            # If it starts with a property but no opening brace, add them
-            if cleaned_text.startswith('"') and '{' not in cleaned_text[:10]:
-                cleaned_text = '{' + cleaned_text + '}'
-            
+            # Clean and parse the JSON response
+            cleaned_text = self._clean_json_response(response_text)
             return json.loads(cleaned_text)
             
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON response: {response_text}")
             logger.error(f"Cleaned text was: {cleaned_text}")
-            raise ValueError(f"Invalid JSON response: {str(e)}")
+            # Return a default structure to prevent complete failure
+            return self._get_fallback_response(response_text)
+    
+    def _clean_json_response(self, response_text: str) -> str:
+        """Clean the response text to extract valid JSON"""
+        cleaned = response_text.strip()
+        
+        # Remove markdown code blocks
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        elif cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        
+        cleaned = cleaned.strip()
+        
+        # If response starts with a property but no opening brace, add braces
+        if cleaned.startswith('"') and not cleaned.startswith('{'):
+            cleaned = '{' + cleaned + '}'
+        
+        # Try to find JSON content within the response
+        import re
+        
+        # Look for the main JSON structure - more comprehensive patterns
+        patterns = [
+            r'\{(?:[^{}]|{[^{}]*})*\}',  # Simple nested braces
+            r'\{.*?\}(?=\s*$)',          # JSON to end of string
+            r'\{[\s\S]*\}',              # Any content between braces
+            r'(\{[\s\S]*\})',            # Capture group for full JSON
+        ]
+        
+        for pattern in patterns:
+            json_match = re.search(pattern, cleaned, re.DOTALL | re.MULTILINE)
+            if json_match:
+                candidate = json_match.group(0)
+                # Test if it's valid JSON
+                try:
+                    json.loads(candidate)
+                    cleaned = candidate
+                    break
+                except (json.JSONDecodeError, Exception):
+                    continue
+        
+        return cleaned
+    
+    def _get_fallback_response(self, original_response: str) -> Dict[str, Any]:
+        """Generate a fallback response when JSON parsing fails"""
+        logger.warning(f"Using fallback response due to JSON parsing failure")
+        
+        # Try to extract meaningful information from the response
+        if "score" in original_response.lower():
+            # For verification responses
+            return {
+                "score": 0.5,
+                "confidence": 0.5,
+                "issues": ["JSON parsing failed, using fallback"],
+                "passed": False
+            }
+        elif "steps" in original_response.lower():
+            # For planning responses
+            return {
+                "steps": []
+            }
+        else:
+            # Generic fallback
+            return {"error": "JSON parsing failed", "raw_response": original_response}
     
     def generate_text_response(
         self,

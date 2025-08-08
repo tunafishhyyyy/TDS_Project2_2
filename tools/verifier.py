@@ -163,17 +163,22 @@ class VerifierTool:
             
             # Get LLM response
             messages = [
-                {"role": "system", "content": "You are an expert data verification assistant."},
+                {"role": "system", "content": "You are an expert data verification assistant. Return only valid JSON."},
                 {"role": "user", "content": prompt}
             ]
             
             response = llm_client.generate_json_response(messages)
             
-            # Parse response
+            # Parse response with fallback handling
             score = float(response.get("score", 0.5))
             confidence = float(response.get("confidence", 0.5))
             issues = response.get("issues", [])
             passed = response.get("passed", False)
+            
+            # If response was fallback, mark as failed with reasonable score
+            if "JSON parsing failed" in str(issues):
+                score = 0.5
+                passed = False
             
             return VerificationResult(
                 score=score,

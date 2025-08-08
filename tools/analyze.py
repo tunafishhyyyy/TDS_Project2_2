@@ -35,6 +35,29 @@ def analyze(params: Dict[str, Any]) -> Dict[str, Any]:
             df = pd.DataFrame(data)
         elif isinstance(data, pd.DataFrame):
             df = data
+        elif isinstance(data, dict):
+            # Handle fetch_web output format
+            if "data" in data and "tables" in data["data"]:
+                # Extract table data from fetch_web output
+                tables = data["data"]["tables"]
+                if tables and len(tables) > 0:
+                    # Use the first table by default
+                    table_data = tables[0]
+                    if "rows" in table_data:
+                        df = pd.DataFrame(table_data["rows"])
+                        # Set column names if available
+                        if "columns" in table_data and df.shape[1] == len(table_data["columns"]):
+                            df.columns = table_data["columns"]
+                    else:
+                        raise ValueError("Table data missing 'rows' field")
+                else:
+                    raise ValueError("No tables found in data")
+            else:
+                # Try to convert dict directly to DataFrame
+                try:
+                    df = pd.DataFrame(data)
+                except Exception as e:
+                    raise ValueError(f"Cannot convert dict to DataFrame: {data}")
         else:
             raise ValueError(f"Unsupported data type: {type(data)}")
         
