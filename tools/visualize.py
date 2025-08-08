@@ -84,6 +84,34 @@ def _create_plotly_chart(df: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, 
         elif chart_type == "scatter":
             fig = px.scatter(df, x=x, y=y, color=color, title=title,
                            width=width, height=height)
+            
+            # Add regression line if requested
+            add_regression = params.get("add_regression", False)
+            if add_regression and x and y:
+                # Calculate regression line
+                x_vals = df[x].dropna()
+                y_vals = df[y].dropna()
+                
+                # Align the data
+                common_idx = x_vals.index.intersection(y_vals.index)
+                x_clean = x_vals.loc[common_idx].values
+                y_clean = y_vals.loc[common_idx].values
+                
+                if len(x_clean) > 1:
+                    # Calculate linear regression
+                    coeffs = np.polyfit(x_clean, y_clean, 1)
+                    regression_line = np.polyval(coeffs, x_clean)
+                    
+                    # Add regression line trace
+                    reg_color = params.get("regression_color", "red")
+                    linestyle = params.get("regression_style", "dash")
+                    
+                    fig.add_scatter(
+                        x=x_clean, y=regression_line,
+                        mode='lines',
+                        name=f'Regression (slope={coeffs[0]:.3f})',
+                        line=dict(color=reg_color, dash=linestyle)
+                    )
         
         elif chart_type == "histogram":
             fig = px.histogram(df, x=x, color=color, title=title,
@@ -170,7 +198,33 @@ def _create_matplotlib_chart(df: pd.DataFrame, params: Dict[str, Any]) -> Dict[s
         
         elif chart_type == "scatter":
             if x and y:
-                plt.scatter(df[x], df[y])
+                plt.scatter(df[x], df[y], alpha=0.6)
+                
+                # Add regression line if requested
+                add_regression = params.get("add_regression", False)
+                if add_regression:
+                    # Calculate regression line
+                    x_vals = df[x].dropna()
+                    y_vals = df[y].dropna()
+                    
+                    # Align the data
+                    common_idx = x_vals.index.intersection(y_vals.index)
+                    x_clean = x_vals.loc[common_idx]
+                    y_clean = y_vals.loc[common_idx]
+                    
+                    if len(x_clean) > 1:
+                        # Calculate linear regression
+                        coeffs = np.polyfit(x_clean, y_clean, 1)
+                        regression_line = np.polyval(coeffs, x_clean)
+                        
+                        # Plot regression line
+                        linestyle = params.get("regression_style", "--")
+                        color = params.get("regression_color", "red")
+                        plt.plot(x_clean, regression_line, 
+                               linestyle=linestyle, color=color, 
+                               label=f'Regression Line (slope={coeffs[0]:.3f})')
+                        plt.legend()
+                
                 plt.xlabel(x)
                 plt.ylabel(y)
             else:
@@ -198,7 +252,19 @@ def _create_matplotlib_chart(df: pd.DataFrame, params: Dict[str, Any]) -> Dict[s
         
         # Convert to base64
         buffer = io.BytesIO()
-        plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+        
+        # Try different quality settings to keep under 100KB
+        for dpi in [100, 80, 60, 40]:
+            buffer.seek(0)
+            buffer.truncate()
+            
+            plt.savefig(buffer, format='png', dpi=dpi, bbox_inches='tight',
+                        facecolor='white', edgecolor='none')
+            
+            image_size = buffer.tell()
+            if image_size < 100000:  # Under 100KB
+                break
+        
         buffer.seek(0)
         image_base64 = base64.b64encode(buffer.getvalue()).decode()
         plt.close()
@@ -209,7 +275,9 @@ def _create_matplotlib_chart(df: pd.DataFrame, params: Dict[str, Any]) -> Dict[s
             "metadata": {
                 "chart_type": chart_type,
                 "engine": "matplotlib",
-                "format": "base64_png"
+                "format": "base64_png",
+                "size_bytes": len(image_base64) * 3 // 4,  # Approx size
+                "dpi": dpi
             }
         }
     

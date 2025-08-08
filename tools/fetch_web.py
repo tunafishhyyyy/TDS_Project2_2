@@ -7,7 +7,49 @@ from typing import Dict, Any, List, Optional
 from urllib.parse import urljoin, urlparse
 import json
 import time
+import pandas as pd
 from app.logger import logger
+
+
+def _extract_tables(soup: BeautifulSoup) -> List[Dict[str, Any]]:
+    """Extract all tables from the HTML soup"""
+    tables = []
+    
+    for table_idx, table in enumerate(soup.find_all("table")):
+        try:
+            # Use pandas to parse the table
+            table_html = str(table)
+            df_list = pd.read_html(table_html)
+            
+            if df_list:
+                df = df_list[0]
+                
+                # Convert to dictionary format
+                table_data = {
+                    "table_index": table_idx,
+                    "columns": df.columns.tolist(),
+                    "rows": df.values.tolist(),
+                    "data": df.to_dict("records"),
+                    "shape": df.shape
+                }
+                
+                # Try to get table caption or nearby heading
+                caption = table.find("caption")
+                if caption:
+                    table_data["caption"] = caption.get_text(strip=True)
+                
+                # Look for preceding heading
+                prev_element = table.find_previous(["h1", "h2", "h3", "h4"])
+                if prev_element:
+                    table_data["heading"] = prev_element.get_text(strip=True)
+                
+                tables.append(table_data)
+                
+        except Exception as e:
+            logger.warning(f"Failed to parse table {table_idx}: {str(e)}")
+            continue
+    
+    return tables
 
 
 def fetch_web(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -48,7 +90,7 @@ def fetch_web(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": str(e), "data": None}
 
 
-def _scrape_url(url: str, selectors: Dict[str, str], 
+def _scrape_url(url: str, selectors: Dict[str, str],
                 headers: Dict[str, str], timeout: int) -> Dict[str, Any]:
     """Scrape data from a specific URL"""
     try:
@@ -65,18 +107,28 @@ def _scrape_url(url: str, selectors: Dict[str, str],
                 if len(elements) == 1:
                     extracted_data[key] = elements[0].get_text(strip=True)
                 else:
-                    extracted_data[key] = [el.get_text(strip=True) 
-                                         for el in elements]
+                    extracted_data[key] = [
+                        el.get_text(strip=True) for el in elements
+                    ]
             else:
                 extracted_data[key] = None
         
-        # If no selectors provided, return basic page info
+        # If no selectors provided, try to extract tables automatically
         if not selectors:
+            # Try to extract tables first (useful for Wikipedia)
+            tables_data = _extract_tables(soup)
+            
+            title_elem = soup.find("title")
+            title = title_elem.get_text(strip=True) if title_elem else ""
+            
             extracted_data = {
-                "title": soup.find("title").get_text(strip=True) if soup.find("title") else "",
+                "title": title,
+                "tables": tables_data,
                 "text_content": soup.get_text()[:1000] + "...",
-                "links": [urljoin(url, a.get("href", "")) 
-                         for a in soup.find_all("a", href=True)][:10]
+                "links": [
+                    urljoin(url, a.get("href", ""))
+                    for a in soup.find_all("a", href=True)
+                ][:10]
             }
         
         return {
