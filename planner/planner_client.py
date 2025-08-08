@@ -129,8 +129,8 @@ class ReplannerClient:
             
             # Prepare context
             prompt = self.prompt_template.format(
-                original_plan=original_plan.json(indent=2),
-                failed_step=failed_step.json(indent=2),
+                original_plan=original_plan.model_dump_json(indent=2),
+                failed_step=failed_step.model_dump_json(indent=2),
                 error_details=error_details,
                 verification_issues=json.dumps(verification_issues or {})
             )

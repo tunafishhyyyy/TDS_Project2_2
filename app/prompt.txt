@@ -1,6 +1,27 @@
+#Issue1 : Wikipedia example is not working Here is the current output for the wikipedia example  :
+
+Restarting llm_orchestrator ... done
+(venv) root@vmi2741552:/work/tanmay/TDS/TDS_Project2_2# sleep 5 && curl http://localhost:8080/health
+(venv) root@vmi2741552:/work/tanmay/TDS/TDS_Project2_2# curl -X POST http://localhost:8080/query \2# curl -X POST http://localhost:8080/query \
+-H "Content-Type: application/json" \
+-d '{
+  "query": "Scrape the list of highest grossing films from Wikipedia. It is at the URL: https://en.wikipedia.org/wiki/List_of_highest-grossing_films. Answer the following questions and respond with a JSON array of strings containing the answer: 1. How many $2 bn movies were released before 2000? 2. Which is the earliest film that grossed over $1.5 bn? 3. What'\''s the correlation between the Rank and Peak? 4. Draw a scatterplot of Rank and Peak along with a dotted red regression line through it. Return as a base-64 encoded data URI, \"data:image/png;base64,iVBORw0KG...\" under 100,000 bytes."
+}'
+{"plan_id":"error","status":"failed","result":null,"steps":[],"error":"'\\n  \"steps\"'","execution_time":0.014606952667236328}(venv) root@vmi2741(venv) root@vmi2741552:/work/tanmay/TDS/TDS_Project2_2# echo '{
+  "query": "Scrape the list of highest grossing films from Wikipedia. It is at the URL: https://en.wikipedia.org/wiki/List_of_highest-grossing_films. Answer the following questions and respond with a JSON array of strings containing the answer: 1. How many $2 bn movies were released before 2000? 2. Which is the earliest film that grossed over $1.5 bn? 3. What is the correlation between the Rank and Peak? 4. Draw a scatterplot of Rank and Peak along with a dotted red regression line through it. Return as a base-64 encoded data URI, data:image/png;base64,iVBORw0KG... under 100,000 bytes."
+}' > wikipedia_request.json
+(venv) root@vmi2741552:/work/tanmay/TDS/TDS_Project2_2# curl -X POST http://localhost:8080/query \
+-H "Content-Type: application/json" \
+-d @wikipedia_request.json
+{"plan_id":"error","status":"failed","result":null,"steps":[],"error":"'\\n  \"steps\"'","execution_time":0.005057334899902344}(venv) root@vmi2741552:/work/tanmay/TDS/TDS_Project2_2# 
 
 
+Issue2 : The api interface design is not correct :
+Your application exposes an API endpoint. You may host it anywhere. Let’s assume it’s at https://app.example.com/api/.
 
+The endpoint must accept a POST request, e.g. POST https://app.example.com/api/ with a data analysis task description and optional attachments in the body. For example:
+
+curl "https://app.example.com/api/" -F "questions.txt=@question.txt" -F "image.png=@image.png" -F "data.csv=@data.csv"
 
 == Important Instructions ==
 * While running in Agent mode, do not run commands directly on this machine. The actual Python code and API server run inside a Docker container. All tests and commands should either be executed using `curl` or from within the Docker container.

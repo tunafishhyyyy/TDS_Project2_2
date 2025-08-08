@@ -1,10 +1,13 @@
 """
 FastAPI application entry point
 """
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import (FastAPI, HTTPException, BackgroundTasks, 
+                     File, UploadFile, Form)
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import uvicorn
+import tempfile
+import os
 
 from app.models import QueryRequest, QueryResponse
 from app.orchestrator import orchestrator
@@ -71,6 +74,82 @@ async def process_query(request: QueryRequest):
         
     except Exception as e:
         logger.error(f"Query processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/")
+async def process_data_analysis(
+    files: List[UploadFile] = File(...),
+    question_text: Optional[str] = Form(None)
+):
+    """
+    Main API endpoint for data analysis tasks
+    Accepts multiple files and returns JSON array of answers
+    """
+    try:
+        logger.info(f"Received API request with {len(files)} files")
+        
+        # Process uploaded files
+        file_data = {}
+        query_text = question_text
+        
+        for file in files:
+            filename = file.filename or "unknown"
+            content = await file.read()
+            
+            # Handle different file types
+            if filename.endswith(('.txt', '.md')):
+                # Text files contain the questions
+                text_content = content.decode('utf-8')
+                if not query_text:
+                    query_text = text_content
+                file_data[filename] = text_content
+                
+            elif filename.endswith(('.csv', '.json', '.xlsx')):
+                # Data files - save temporarily and add to context
+                temp_path = f"/tmp/{filename}"
+                with open(temp_path, 'wb') as f:
+                    f.write(content)
+                file_data[filename] = temp_path
+                
+            elif filename.endswith(('.png', '.jpg', '.jpeg')):
+                # Image files - save temporarily
+                temp_path = f"/tmp/{filename}"
+                with open(temp_path, 'wb') as f:
+                    f.write(content)
+                file_data[filename] = temp_path
+        
+        if not query_text:
+            raise HTTPException(
+                status_code=400, 
+                detail="No query text found in uploaded files or form data"
+            )
+        
+        # Create request with file context
+        request = QueryRequest(
+            query=query_text,
+            context={"files": file_data},
+            files=list(file_data.keys())
+        )
+        
+        # Process the query
+        response = await orchestrator.process_query(request)
+        
+        # Return JSON array format as expected
+        if response.status == "success" and response.result:
+            if isinstance(response.result, list):
+                return response.result
+            else:
+                return [str(response.result)]
+        else:
+            error_msg = response.error or "Processing failed"
+            logger.error(f"API processing failed: {error_msg}")
+            raise HTTPException(status_code=500, detail=error_msg)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API request failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

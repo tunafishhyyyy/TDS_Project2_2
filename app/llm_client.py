@@ -60,18 +60,38 @@ class LLMClient:
             response_text = self.generate_completion(
                 messages=messages,
                 temperature=temperature,
-                json_mode=True
+                json_mode=False  # Disable JSON mode for compatibility
             )
             
-            return json.loads(response_text)
+            # Try to extract JSON from markdown code blocks or clean up
+            cleaned_text = response_text.strip()
+            
+            # Remove markdown code blocks if present
+            if cleaned_text.startswith("```json"):
+                cleaned_text = cleaned_text[7:]  # Remove ```json
+                if cleaned_text.endswith("```"):
+                    cleaned_text = cleaned_text[:-3]  # Remove trailing ```
+            elif cleaned_text.startswith("```"):
+                cleaned_text = cleaned_text[3:]  # Remove ```
+                if cleaned_text.endswith("```"):
+                    cleaned_text = cleaned_text[:-3]  # Remove trailing ```
+            
+            cleaned_text = cleaned_text.strip()
+            
+            # If it starts with a property but no opening brace, add them
+            if cleaned_text.startswith('"') and '{' not in cleaned_text[:10]:
+                cleaned_text = '{' + cleaned_text + '}'
+            
+            return json.loads(cleaned_text)
             
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON response: {response_text}")
+            logger.error(f"Cleaned text was: {cleaned_text}")
             raise ValueError(f"Invalid JSON response: {str(e)}")
     
     def generate_text_response(
-        self, 
-        prompt: str, 
+        self,
+        prompt: str,
         system_message: Optional[str] = None,
         temperature: Optional[float] = None
     ) -> str:
