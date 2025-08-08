@@ -18,8 +18,9 @@ def _extract_tables(soup: BeautifulSoup) -> List[Dict[str, Any]]:
     for table_idx, table in enumerate(soup.find_all("table")):
         try:
             # Use pandas to parse the table
+            from io import StringIO
             table_html = str(table)
-            df_list = pd.read_html(table_html)
+            df_list = pd.read_html(StringIO(table_html))
             
             if df_list:
                 df = df_list[0]
@@ -77,7 +78,13 @@ def fetch_web(params: Dict[str, Any]) -> Dict[str, Any]:
         logger.info(f"Fetching web data: {method} - {query}")
         
         if method == "scrape":
-            return _scrape_url(query, selectors, headers, timeout)
+            # Validate query is a URL
+            import re
+            url_pattern = r"^https?://[\w\.-]+(?:/[\w\.-]*)*"
+            if not isinstance(query, str) or not re.match(url_pattern, query.strip()):
+                logger.error(f"fetch_web: 'scrape' method requires a valid URL, got: {query}")
+                return {"error": "Invalid URL for scrape method", "data": None}
+            return _scrape_url(query.strip(), selectors, headers, timeout)
         elif method == "api":
             return _fetch_api(query, headers, timeout)
         elif method == "search":

@@ -69,102 +69,46 @@ class PlannerClient:
             
             # Handle fallback response when JSON parsing fails
             if "JSON parsing failed" in str(response) or not response.get("steps"):
-                logger.warning("LLM response parsing failed, creating basic plan")
-                
-                # Create a fallback plan that answers each question
+                logger.warning("LLM response parsing failed, creating generic fallback plan using LLM")
+                # Try to extract a valid URL from the query/context
+                import re
+                url_pattern = r"https?://[\w\.-]+(?:/[\w\.-]*)*"
+                url_match = re.search(url_pattern, query)
+                url = url_match.group(0) if url_match else None
+                if not url and context:
+                    context_str = json.dumps(context)
+                    url_match = re.search(url_pattern, context_str)
+                    url = url_match.group(0) if url_match else None
+                if not url:
+                    logger.error("No valid URL found in query or context for fallback plan.")
+                    raise ValueError("No valid URL found for web scraping.")
+                # Minimal generic plan: fetch data, then use LLM to analyze and answer
                 basic_steps = [
                     ExecutionStep(
                         step_id=1,
                         tool=ToolType.FETCH_WEB,
                         params={
-                            "query": "https://en.wikipedia.org/wiki/List_of_highest-grossing_films",
+                            "query": url,
                             "method": "scrape",
                             "table_extraction": True
                         },
-                        expected_output="Wikipedia page data with highest-grossing films table",
+                        expected_output="Data scraped from the web source",
                         status=StepStatus.PENDING
                     ),
-                    # Cleaning step for numeric columns
                     ExecutionStep(
                         step_id=2,
                         tool=ToolType.ANALYZE,
                         params={
                             "input": "output_of_step_1",
-                            "operation": "cleaning",
-                            "cleaning": {
-                                "Worldwide gross": "remove non-numeric characters, convert to float",
-                                "Peak": "remove non-numeric characters, convert to int"
-                            }
+                            "operation": "llm_answer",
+                            "query": query
                         },
-                        expected_output="Cleaned numeric columns for analysis",
-                        status=StepStatus.PENDING
-                    ),
-                    # Q1: How many $2 bn movies were released before 2000?
-                    ExecutionStep(
-                        step_id=3,
-                        tool=ToolType.ANALYZE,
-                        params={
-                            "input": "output_of_step_2",
-                            "operation": "filter",
-                            "filters": {
-                                "Worldwide gross": ">=2000000000",
-                                "Year": "<2000"
-                            },
-                            "count": True
-                        },
-                        expected_output="Count of $2bn movies released before 2000",
-                        status=StepStatus.PENDING
-                    ),
-                    # Q2: Earliest film that grossed over $1.5 bn
-                    ExecutionStep(
-                        step_id=4,
-                        tool=ToolType.ANALYZE,
-                        params={
-                            "input": "output_of_step_2",
-                            "operation": "filter",
-                            "filters": {
-                                "Worldwide gross": ">=1500000000"
-                            },
-                            "sort_by": "Year",
-                            "sort_order": "asc",
-                            "top_n": 1
-                        },
-                        expected_output="Earliest film that grossed over $1.5bn",
-                        status=StepStatus.PENDING
-                    ),
-                    # Q3: Correlation between Rank and Peak
-                    ExecutionStep(
-                        step_id=5,
-                        tool=ToolType.ANALYZE,
-                        params={
-                            "input": "output_of_step_2",
-                            "operation": "correlation",
-                            "columns": ["Rank", "Peak"]
-                        },
-                        expected_output="Correlation between Rank and Peak",
-                        status=StepStatus.PENDING
-                    ),
-                    # Q4: Scatterplot with regression line
-                    ExecutionStep(
-                        step_id=6,
-                        tool=ToolType.VISUALIZE,
-                        params={
-                            "input": "output_of_step_2",
-                            "x": "Rank",
-                            "y": "Peak",
-                            "plot_type": "scatter",
-                            "regression": True,
-                            "line_style": "dotted",
-                            "line_color": "red",
-                            "output_format": "data_uri",
-                            "max_bytes": 100000
-                        },
-                        expected_output="Base64-encoded PNG data URI of scatterplot with dotted red regression line, under 100,000 bytes.",
+                        expected_output="LLM answers to user questions using the scraped data",
                         status=StepStatus.PENDING
                     )
                 ]
                 plan = ExecutionPlan(steps=basic_steps)
-                logger.info(f"Generated fallback plan with {len(basic_steps)} steps")
+                logger.info(f"Generated generic fallback plan with {len(basic_steps)} steps")
                 return plan
             
             # Parse and validate response
@@ -237,7 +181,9 @@ class ReplannerClient:
             
             # Get LLM response
             messages = [
-                {"role": "system", "content": "You are an expert replanner. Return only valid JSON with 'steps' array."},
+                {"role": "system",
+                 "content": ("You are an expert replanner. Return only "
+                             "valid JSON with 'steps' array.")},
                 {"role": "user", "content": prompt}
             ]
             
@@ -249,7 +195,8 @@ class ReplannerClient:
             
             # Handle empty response or fallback response
             if not response_steps or "JSON parsing failed" in str(response):
-                logger.warning("Replanning response was empty or malformed, creating simple retry step")
+                logger.warning("Replanning response was empty or malformed, "
+                               "creating simple retry step")
                 # Create a simple retry step
                 step = ExecutionStep(
                     step_id=failed_step.step_id,

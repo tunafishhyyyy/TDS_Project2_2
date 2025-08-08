@@ -26,9 +26,11 @@ def analyze(params: Dict[str, Any]) -> Dict[str, Any]:
     try:
         data = params.get("data")
         operation = params.get("operation", "summary")
-        
+        # Accept 'input' as alias for 'data' for fallback plans
+        if data is None and "input" in params:
+            data = params["input"]
         if not data:
-            raise ValueError("data parameter is required")
+            return {"status": "error", "error": "data parameter is required or missing from previous step", "data": None}
         
         # Convert data to DataFrame
         if isinstance(data, list):
@@ -92,6 +94,24 @@ def analyze(params: Dict[str, Any]) -> Dict[str, Any]:
                     if "convert to int" in rule:
                         cleaned_df[col] = pd.to_numeric(cleaned_df[col], errors="coerce").astype('Int64')
             return {"status": "success", "data": cleaned_df.to_dict("records"), "columns": list(cleaned_df.columns)}
+        elif operation == "llm_answer":
+            # Use LLM to answer questions over the DataFrame
+            from app.llm_client import llm_client
+            # Convert DataFrame to JSON string (limit rows for prompt size)
+            data_json = df.head(30).to_json(orient="records")
+            user_query = params.get("query", "")
+            prompt = (
+                "You are a data analysis expert. Given the following table data (as JSON) and user questions, "
+                "answer the questions as a JSON array of strings.\n\n"
+                f"Table Data (first 30 rows):\n{data_json}\n\nUser Query:\n{user_query}\n\n"
+                "Return only a JSON array of strings, no explanations."
+            )
+            messages = [
+                {"role": "system", "content": "You are a helpful data analysis assistant."},
+                {"role": "user", "content": prompt}
+            ]
+            llm_response = llm_client.generate_json_response(messages)
+            return {"status": "success", "data": llm_response}
         else:
             raise ValueError(f"Unknown operation: {operation}")
     

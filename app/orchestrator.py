@@ -9,10 +9,10 @@ from app.models import (
 from planner.planner_client import planner_client, replanner_client
 from tools import tool_registry
 from tools.verifier import verifier_tool
-from app.formatter import response_formatter
-from app.config import config
 from app.logger import logger, log_step_execution
 
+
+import json
 
 class Orchestrator:
     """Central orchestration engine"""
@@ -66,76 +66,125 @@ class Orchestrator:
     async def _execute_plan(self, plan: ExecutionPlan) -> Any:
         """Execute all steps in the plan and format answers as JSON array"""
         try:
-            logger.info(f"Executing plan {plan.plan_id} with {len(plan.steps)} steps")
+            steps_count = len(plan.steps)
+            plan_msg = f"Executing plan {plan.plan_id} with {steps_count} steps"
+            logger.info(plan_msg)
             previous_context = {}
             answers = []
             for step in plan.steps:
                 result = await self._execute_step(step, previous_context)
                 if result is None:
-                    success = await self._handle_step_failure(plan, step, previous_context)
+                    success = await self._handle_step_failure(
+                        plan, step, previous_context)
                     if not success:
-                        logger.error(f"Plan execution failed at step {step.step_id}")
-                        return None
+                        step_id = step.step_id
+                        error_msg = f"Plan execution failed at step {step_id}"
+                        logger.error(error_msg)
+                        # Return partial answers if any, else error string
+                        return answers if answers else ["Processing failed"]
                 else:
                     previous_context[f"step_{step.step_id}"] = result
-                    # Collect answers based on step results
-                    if step.step_id == 3:
-                        # Q1: Count of $2bn movies before 2000
-                        count = None
-                        if isinstance(result, dict):
-                            if "count" in result:
-                                count = result["count"]
-                            elif "metadata" in result and "filtered_rows" in result["metadata"]:
-                                count = result["metadata"]["filtered_rows"]
-                            elif "data" in result:
-                                count = len(result["data"])
-                        elif isinstance(result, int):
-                            count = result
-                        answers.append(f"Number of $2bn movies released before 2000: {count}")
-                    elif step.step_id == 4:
-                        # Q2: Earliest film over $1.5bn  
-                        if isinstance(result, dict) and "data" in result and result["data"]:
-                            row = result["data"][0] if result["data"] else None
-                            title = row.get("Title") if row else "N/A"
-                            year = row.get("Year") if row else "N/A"
-                            answers.append(f"Earliest film over $1.5bn: {title} ({year})")
-                        else:
-                            answers.append(str(result))
-                    elif step.step_id == 5:
-                        # Q3: Correlation - DEBUG
-                        logger.info(f"DEBUG: Step 5 result type: {type(result)}")
-                        logger.info(f"DEBUG: Step 5 result: {result}")
-                        corr = None
-                        if isinstance(result, dict):
-                            if "data" in result:
-                                corr_data = result["data"]
-                                if isinstance(corr_data, dict) and "correlation_matrix" in corr_data:
-                                    corr_matrix = corr_data["correlation_matrix"]
-                                    if "Rank" in corr_matrix and "Peak" in corr_matrix["Rank"]:
-                                        corr = corr_matrix["Rank"]["Peak"]
-                                        if isinstance(corr, float):
-                                            corr = round(corr, 4)
-                            elif "correlation" in result:
-                                corr = result["correlation"]
-                        logger.info(f"DEBUG: Parsed correlation: {corr}")
-                        answers.append(f"Correlation between Rank and Peak: {corr}")
-                    elif step.step_id == 6:
-                        # Q4: Scatterplot
-                        img_uri = None
-                        if isinstance(result, dict):
-                            if "data" in result and isinstance(result["data"], str) and result["data"].startswith("data:image"):
-                                img_uri = result["data"]
-                            else:
-                                img_uri = result.get("data_uri") or result.get("chart_uri") or result.get("image")
-                        answers.append(f"Scatterplot: {img_uri}")
-            return answers
+                    # Always format result as a string for API output
+                    formatted_result = self._format_step_result(step, result)
+                    # Fallback: if analyze step, format summary as string
+                    if not formatted_result and step.tool == "analyze":
+                        if isinstance(result, dict) and "data" in result:
+                            # Use pandas/numpy-safe serialization
+                            import numpy as np
+                            def safe_json(obj):
+                                import pandas as pd
+                                # Handle numpy integer/floating types
+                                if isinstance(obj, (np.integer, np.int64, np.int32)):
+                                    return int(obj)
+                                if isinstance(obj, (np.floating, np.float64, np.float32)):
+                                    return float(obj)
+                                # Handle numpy dtypes
+                                if isinstance(obj, np.dtype):
+                                    return str(obj)
+                                # Handle pandas types
+                                if isinstance(obj, pd.Series):
+                                    return obj.tolist()
+                                if isinstance(obj, pd.DataFrame):
+                                    return obj.to_dict()
+                                if hasattr(obj, 'tolist'):
+                                    return obj.tolist()
+                                return str(obj)
+                            formatted_result = json.dumps(result["data"], default=safe_json)
+                    if formatted_result:
+                        answers.append(str(formatted_result))
+            return answers if answers else ["Processing failed"]
         except Exception as e:
             logger.error(f"Plan execution failed: {str(e)}")
             return None
+
+    def _format_step_result(self,
+                            step: ExecutionStep,
+                            result: Any) -> Optional[str]:
+        """Format step result into a human-readable answer"""
+        try:
+            # For counting operations
+            if isinstance(result, dict) and "count" in result:
+                return f"Count result: {result['count']}"
+
+            # For data filtering/analysis with metadata
+            if (isinstance(result, dict) and "metadata" in result and
+                    "filtered_rows" in result["metadata"]):
+                count = result["metadata"]["filtered_rows"]
+                return f"Filtered results count: {count}"
+
+            # For correlation analysis
+            if isinstance(result, dict) and "data" in result:
+                data = result["data"]
+                if isinstance(data, dict) and "correlation_matrix" in data:
+                    # Extract correlation values generically
+                    corr_matrix = data["correlation_matrix"]
+                    correlations = []
+                    for col1, values in corr_matrix.items():
+                        for col2, corr_val in values.items():
+                            if col1 != col2 and isinstance(corr_val, float):
+                                corr_rounded = round(corr_val, 4)
+                                corr_text = (f"{col1} vs {col2}: "
+                                             f"{corr_rounded}")
+                                correlations.append(corr_text)
+                    if correlations:
+                        return "Correlations: " + ", ".join(correlations)
+
+            # For visualization results (data URIs)
+            if (isinstance(result, dict) and "data" in result and
+                    isinstance(result["data"], str) and
+                    result["data"].startswith("data:image")):
+                return f"Visualization: {result['data']}"
+
+            # For data results with records
+            if (isinstance(result, dict) and "data" in result and
+                    isinstance(result["data"], list) and result["data"]):
+                data_list = result["data"]
+                if len(data_list) == 1:
+                    # Single result - format nicely
+                    item = data_list[0]
+                    if isinstance(item, dict):
+                        key_values = [f"{k}: {v}" for k, v in item.items()
+                                      if k not in ['Ref']]  # Skip refs
+                        # Limit to 5 fields
+                        return "Result: " + ", ".join(key_values[:5])
+                else:
+                    # Multiple results
+                    return f"Results: {len(data_list)} records found"
+
+            # Fallback for any other result
+            if isinstance(result, (str, int, float, bool)):
+                return f"Result: {result}"
+
+            # If we can't format it nicely, return None to skip
+            return None
+
+        except Exception as e:
+            logger.warning(f"Failed to format step result: {str(e)}")
+            return f"Step {step.step_id} completed"
     
     async def _execute_step(
-        self, 
-        step: ExecutionStep, 
+        self,
+        step: ExecutionStep,
         previous_context: Dict[str, Any]
     ) -> Optional[Any]:
         """Execute a single step"""
@@ -157,7 +206,7 @@ class Orchestrator:
                 step.status = StepStatus.FAILED
                 step.error = result.get("error")
                 log_step_execution(
-                    step.step_id, str(step.tool), step.params, 
+                    step.step_id, str(step.tool), step.params,
                     error=step.error
                 )
                 return None
@@ -176,8 +225,9 @@ class Orchestrator:
             step.execution_time = time.time() - step_start_time
             
             # Accept steps with score >= 0.3 or if issues contain JSON failure
-            should_accept = (verification_result.score >= 0.3 or
-                            "JSON parsing failed" in str(verification_result.issues))
+            issues_str = str(verification_result.issues)
+            json_fail = "JSON parsing failed" in issues_str
+            should_accept = (verification_result.score >= 0.3 or json_fail)
             
             if not verification_result.passed and not should_accept:
                 step.status = StepStatus.FAILED
@@ -206,13 +256,18 @@ class Orchestrator:
             logger.error(f"Step {step.step_id} execution failed: {str(e)}")
             step.status = StepStatus.FAILED
             step.error = str(e)
-            step.execution_time = time.time() - step_start_time if 'step_start_time' in locals() else 0
+            # Calculate execution time safely
+            if 'step_start_time' in locals():
+                elapsed = time.time() - step_start_time
+            else:
+                elapsed = 0
+            step.execution_time = elapsed
             return None
     
     async def _handle_step_failure(
-        self, 
-        plan: ExecutionPlan, 
-        failed_step: ExecutionStep, 
+        self,
+        plan: ExecutionPlan,
+        failed_step: ExecutionStep,
         previous_context: Dict[str, Any]
     ) -> bool:
         """Handle failed step by replanning"""
@@ -224,22 +279,27 @@ class Orchestrator:
                 failed_step.status = StepStatus.RETRYING
                 
                 # Generate alternative plan
+                verification_data = {"score": failed_step.verification_score}
                 new_plan = replanner_client.replan_step(
                     original_plan=plan,
                     failed_step=failed_step,
                     error_details=failed_step.error or "Unknown error",
-                    verification_issues={"score": failed_step.verification_score}
+                    verification_issues=verification_data
                 )
                 
                 # Replace the failed step with new steps
                 step_index = plan.steps.index(failed_step)
-                plan.steps = plan.steps[:step_index] + new_plan.steps + plan.steps[step_index + 1:]
+                before_steps = plan.steps[:step_index]
+                after_steps = plan.steps[step_index + 1:]
+                plan.steps = before_steps + new_plan.steps + after_steps
                 
                 # Try executing the new steps
                 for new_step in new_plan.steps:
-                    result = await self._execute_step(new_step, previous_context)
-                    if result is not None:
-                        previous_context[f"step_{new_step.step_id}"] = result
+                    step_result = await self._execute_step(
+                        new_step, previous_context)
+                    if step_result is not None:
+                        step_key = f"step_{new_step.step_id}"
+                        previous_context[step_key] = step_result
                         return True
             
             return False
@@ -249,8 +309,8 @@ class Orchestrator:
             return False
     
     def _resolve_parameters(
-        self, 
-        params: Dict[str, Any], 
+        self,
+        params: Dict[str, Any],
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Resolve parameter references from context"""
@@ -269,7 +329,8 @@ class Orchestrator:
                         resolved["data"] = value
                 else:
                     resolved["data"] = value
-            elif isinstance(value, str) and value.startswith("output_of_step_"):
+            elif (isinstance(value, str) and
+                  value.startswith("output_of_step_")):
                 # Handle other parameter references
                 step_key = value.replace("output_of_", "")
                 if step_key in context:
@@ -288,14 +349,19 @@ class Orchestrator:
         
         plan = self.active_plans[plan_id]
         
+        success_steps = [s for s in plan.steps
+                         if s.status == StepStatus.SUCCESS]
+        failed_steps = [s for s in plan.steps
+                        if s.status == StepStatus.FAILED]
+        running_steps = (s.step_id for s in plan.steps
+                         if s.status == StepStatus.RUNNING)
+        
         return {
             "plan_id": plan.plan_id,
             "total_steps": len(plan.steps),
-            "completed_steps": len([s for s in plan.steps if s.status == StepStatus.SUCCESS]),
-            "failed_steps": len([s for s in plan.steps if s.status == StepStatus.FAILED]),
-            "current_step": next(
-                (s.step_id for s in plan.steps if s.status == StepStatus.RUNNING), None
-            ),
+            "completed_steps": len(success_steps),
+            "failed_steps": len(failed_steps),
+            "current_step": next(running_steps, None),
             "steps": [
                 {
                     "step_id": s.step_id,

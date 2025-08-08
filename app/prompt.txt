@@ -1,5 +1,9 @@
 #Issue1 : Wikipedia example is not working Here is the current output for the wikipedia example  :
-["Number of $2bn movies released before 2000: None","{'status': 'success', 'data': [], 'metadata': {'original_rows': 50, 'filtered_rows': 0, 'filters_applied': {'Worldwide gross': '>=2000000000', 'Year': '<2000'}}}","Correlation between Rank and Peak: None","Scatterplot: None"]
+
+{
+    "detail": "Processing failed"
+}
+
 
 whereas it should have answered the four questions.
 1. How many $2 bn movies were released before 2000?
@@ -8,13 +12,6 @@ whereas it should have answered the four questions.
 4. Draw a scatterplot of Rank and Peak along with a dotted red regression line through it.
 
 full server logs are present in logs/app.log
-
-Issue2 : The api interface design is not correct :
-Your application exposes an API endpoint. You may host it anywhere. Let’s assume it’s at https://app.example.com/api/.
-
-The endpoint must accept a POST request, e.g. POST https://app.example.com/api/ with a data analysis task description and optional attachments in the body. For example:
-
-curl "https://app.example.com/api/" -F "questions.txt=@question.txt" -F "image.png=@image.png" -F "data.csv=@data.csv"
 
 
 == Important Instructions ==
