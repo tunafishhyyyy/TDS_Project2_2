@@ -70,19 +70,70 @@ class PlannerClient:
             # Handle fallback response when JSON parsing fails
             if "JSON parsing failed" in str(response) or not response.get("steps"):
                 logger.warning("LLM response parsing failed, creating generic fallback plan using LLM")
-                # Try to extract a valid URL from the query/context
+                # Check for DuckDB/Parquet/S3/SQL keywords in query/context
+                keywords = ["parquet", "duckdb", "s3", "sql"]
+                query_lower = query.lower()
+                context_str = json.dumps(context or {}).lower()
+                if any(k in query_lower or k in context_str for k in keywords):
+                    # Minimal DuckDB plan: run SQL query, then analyze
+                    duckdb_query = (
+                        "SELECT * FROM data LIMIT 10"
+                        # Default, can be improved
+                    )
+                    # Try to extract a SQL query from the user query if present
+                    import re
+                    sql_match = re.search(
+                        r"SELECT[\s\S]+?;", query, re.IGNORECASE
+                    )
+                    if sql_match:
+                        duckdb_query = sql_match.group(0)
+                    basic_steps = [
+                        ExecutionStep(
+                            step_id=1,
+                            tool=ToolType.DUCKDB_RUNNER,
+                            params={
+                                "query": duckdb_query
+                            },
+                            expected_output=(
+                                "Data loaded and queried from DuckDB"
+                            ),
+                            status=StepStatus.PENDING
+                        ),
+                        ExecutionStep(
+                            step_id=2,
+                            tool=ToolType.ANALYZE,
+                            params={
+                                "input": "output_of_step_1",
+                                "operation": "llm_answer",
+                                "query": query
+                            },
+                            expected_output=(
+                                "LLM answers to user questions "
+                                "using the DuckDB data"
+                            ),
+                            status=StepStatus.PENDING
+                        )
+                    ]
+                    plan = ExecutionPlan(steps=basic_steps)
+                    logger.info(
+                        f"Generated DuckDB fallback plan with "
+                        f"{len(basic_steps)} steps"
+                    )
+                    return plan
+                # Otherwise, fallback to web scraping
                 import re
                 url_pattern = r"https?://[\w\.-]+(?:/[\w\.-]*)*"
                 url_match = re.search(url_pattern, query)
                 url = url_match.group(0) if url_match else None
                 if not url and context:
-                    context_str = json.dumps(context)
                     url_match = re.search(url_pattern, context_str)
                     url = url_match.group(0) if url_match else None
                 if not url:
-                    logger.error("No valid URL found in query or context for fallback plan.")
+                    logger.error(
+                        "No valid URL found in query or context "
+                        "for fallback plan."
+                    )
                     raise ValueError("No valid URL found for web scraping.")
-                # Minimal generic plan: fetch data, then use LLM to analyze and answer
                 basic_steps = [
                     ExecutionStep(
                         step_id=1,
@@ -103,12 +154,18 @@ class PlannerClient:
                             "operation": "llm_answer",
                             "query": query
                         },
-                        expected_output="LLM answers to user questions using the scraped data",
+                        expected_output=(
+                            "LLM answers to user questions "
+                            "using the scraped data"
+                        ),
                         status=StepStatus.PENDING
                     )
                 ]
                 plan = ExecutionPlan(steps=basic_steps)
-                logger.info(f"Generated generic fallback plan with {len(basic_steps)} steps")
+                logger.info(
+                    f"Generated generic fallback plan with "
+                    f"{len(basic_steps)} steps"
+                )
                 return plan
             
             # Parse and validate response

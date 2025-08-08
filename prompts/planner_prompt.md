@@ -35,3 +35,5 @@ Rules:
 User Query: {query}
 
 Context: {context}
+
+Note: The system supports generic tabular analysis, including loading, querying, and processing data using DuckDB. You may plan steps that use DuckDB for SQL queries, statistical analysis, and answering user questions about any table or dataset. Do not hardcode logic for specific columns or examples; always infer schema and analysis steps from the query and context.
