@@ -7,147 +7,251 @@ We aim to build a **generic, modular orchestration framework** that can handle q
 - Perform each step with validation, self-checks, and cross-verification.
 - Work with multiple data ingestion methods (web scraping, CSV ingestion, API queries).
 - Support pluggable modules for future extensibility.
-- Be containerized using **Docker**.
-- Be served as an API using **FastAPI**.
+
+## 1. Overview
+
+This system provides an LLM-driven, tool-augmented framework for answering complex analytical queries involving data fetching, analysis, and visualization.
+Unlike typical LangChain “chains”, the architecture here **decouples planning, execution, and verification** into clean modules to improve maintainability, debugging, and testability.
+
+It is designed to:
+
+- Accept **natural language queries** from users (via API or CLI)
+- Plan execution steps **as structured JSON**
+- Execute steps using **local or external tools**
+- Self-verify results and replan if needed
+- Return **final results in structured form** with provenance
 
 ---
 
-## 2. High-Level Architecture
-### Components:
-1. **FastAPI Backend**
-   - REST API endpoints for:
-     - Submitting a question.
-     - Uploading data (CSV, JSON).
-     - Triggering web scraping.
-     - Checking job status.
-   - Async task handling for long-running workflows.
+## 2. Goals
 
-2. **LLM Orchestration Layer**
-   - Uses **LangChain / custom orchestration** for:
-     - Parsing user questions.
-     - Identifying required steps.
-     - Selecting tools (scraper, CSV loader, API fetcher, DuckDB queries).
-     - Generating intermediate prompts.
-     - Validating outputs.
-   - Maintains a **prompt library** in `prompts/` directory.
-
-3. **Data Ingestion Layer**
-   - **Web Scraping Module**:
-     - Use libraries like Playwright/Selenium + BeautifulSoup for HTML extraction.
-     - For pages with dynamic data loading, intercept network calls (via Playwright or browser dev tools protocol) to detect API endpoints.
-     - LLM prompt-assisted analysis to determine if HTML contains final data or if it is API-loaded.
-     - If API endpoints are found → call them directly.
-   - **CSV Loader**:
-     - Reads and normalizes CSV into DuckDB.
-   - **API Fetcher**:
-     - Calls external APIs with authentication (API keys from `.env`).
-
-4. **Data Storage & Query Layer**
-   - **DuckDB** for:
-     - Local analytics and SQL queries.
-     - Joining data from multiple ingestion sources.
-     - Serving as a fast intermediate store for structured data.
-   - **Filesystem Storage**:
-     - Store raw scraped HTML, API JSON, and uploaded CSVs.
-
-5. **Cross-Verification & Self-Checks**
-   - LLM-based answer validation.
-   - Multiple retrieval paths for same query and result comparison.
-   - If mismatch detected → request clarifications or run alternative queries.
-
-6. **Test Suite**
-   - Unit tests for each ingestion module.
-   - Integration tests for end-to-end workflows.
-   - Mocked test cases for LLM orchestration.
+- **Modular**: Independent, reusable components (planner, tools, verifier, orchestrator)
+- **Observable**: Every step logged with context & results
+- **Testable**: Each tool and LLM prompt tested separately
+- **Fallback-safe**: Automatic replanning on failure
+- **Minimal vendor lock-in**: LangChain removed; LLM calls are direct
+- **Human-auditable**: Plans, intermediate results, and verification output stored
 
 ---
 
-## 3. Data Scraping – Detailed Flow
-1. **User submits a question** → saved to DB/log.
-2. **LLM determines if web scraping is required** using prompt-based decision logic.
-3. **If scraping is needed**:
-   - Try static HTML extraction (BeautifulSoup).
-   - If data is incomplete:
-     - Use Playwright/Selenium to render page.
-     - Intercept network traffic to detect API calls.
-     - LLM analyzes intercepted URLs & responses to determine relevant API endpoints.
-4. **Store scraped/API data** in DuckDB.
-5. **Run SQL queries on DuckDB** to prepare answers.
+## 3. High-Level Architecture
 
----
-
-## 4. Example Prompt Hints (for `prompts/question.txt`)
 ```
-Your task is to determine if a webpage's data is loaded statically or via API calls.
-Hints:
-- If HTML contains placeholders like "Loading...", check network requests.
-- Identify JSON responses in XHR/fetch requests.
-- Use API endpoints directly when found.
+         ┌────────────┐
+         │ User Query │
+         └─────┬──────┘
+               │
+         ┌─────▼────────┐
+         │ Orchestrator │
+         └─────┬────────┘
+    ┌──────────┼──────────┐
+    │          │          │
+┌───▼───┐ ┌────▼─────┐ ┌──▼─────┐
+│Planner│ │Executor  │ │Verifier│
+└───┬───┘ └────┬─────┘ └──┬─────┘
+    │          │          │
+    │   ┌──────▼─────┐    │
+    └──►Tools Layer  │◄───┘
+        └────────────┘
 ```
 
 ---
 
-## 5. Dockerization
-**Dockerfile**
-- Python 3.11 base.
-- Install Playwright browsers in build step.
-- Install all dependencies from `requirements.txt`.
-- Copy project files.
+## 4. Components
 
-**docker-compose.yml**
-- FastAPI service.
-- Optional DuckDB persistence volume.
+### 4.1 Orchestrator (`app/orchestrator.py`)
+
+Central control logic:
+
+1. Receives the user query and optional file/data context.
+2. Invokes **Planner** to generate JSON execution plan.
+3. Executes each step sequentially via **Tools**.
+4. Sends results to **Verifier** after each step.
+5. On failure, invokes **Replanner** for alternative strategy.
+6. Aggregates final outputs & formats response.
+
+**Responsibilities**:
+
+- Flow control
+- Error handling
+- Logging and step-tracking
+- Managing retries
+
+### 4.2 Planner (`planner/planner_client.py`)
+
+- Calls LLM with **`planner_prompt.md`**.
+- Returns JSON with:
+
+  - `step_id`
+  - `tool` (name of tool to run)
+  - `params` (arguments for tool)
+  - `expected_output` (short description)
+- No execution — only planning.
+
+**Schema Example**:
+
+```json
+{
+  "steps": [
+    {
+      "step_id": 1,
+      "tool": "fetch_web",
+      "params": {"query": "top-grossing movies 2024"},
+      "expected_output": "Table of top 10 movies with revenue"
+    }
+  ]
+}
+```
+
+### 4.3 Replanner (`planner/replanner_client.py`)
+
+- Triggered when a step fails or verifier gives low confidence.
+- Uses **`replanner_prompt.md`** to replan only the failed step or adjust the whole plan.
+- Returns revised JSON plan.
+
+### 4.4 Verifier (`tools/verifier.py`)
+
+- Uses **`verifier_prompt.md`** to cross-check intermediate output.
+- Confidence scoring (0–1) for:
+
+  - Factual correctness
+  - Consistency with prior steps
+  - Data completeness
+- Low score triggers replanning.
+
+### 4.5 Tools Layer (`tools/`)
+
+Reusable Python modules for specific actions:
+
+- **`fetch_web.py`** – web scraping / API queries
+- **`load_local.py`** – load local CSV/JSON/DB files
+- **`duckdb_runner.py`** – run SQL queries on in-memory datasets
+- **`analyze.py`** – statistical summaries, transformations
+- **`visualize.py`** – charts (Matplotlib/Plotly)
+- **`verifier.py`** – LLM-based and rule-based checks
+
+**Rules**:
+
+- Each tool has a **pure Python function** with typed inputs/outputs.
+- No direct LLM calls inside tools (except verifier).
+
+### 4.6 Response Formatter (`app/formatter.py`)
+
+- Converts internal Python objects to:
+
+  - JSON API response
+  - Markdown/HTML (for notebooks)
+  - CLI-friendly text
+
+### 4.7 Prompts (`prompts/`)
+
+- **`planner_prompt.md`** – step-by-step plan request
+- **`replanner_prompt.md`** – recovery strategy
+- **`verifier_prompt.md`** – structured checks
+- **`clarifier_prompt.md`** – for ambiguous queries
 
 ---
 
-## 6. Environment Variables (`.env` Example)
+## 5. Data Flow Example
+
+**User query**:
+*"Find the highest grossing film of 2024 and show a bar chart of its top 5 cast members’ screen time."*
+
+1. **Planner** returns:
+
+```json
+{
+  "steps": [
+    {"step_id": 1, "tool": "fetch_web", "params": {"query": "highest grossing film 2024"}},
+    {"step_id": 2, "tool": "fetch_web", "params": {"query": "cast members of <film> with screen time"}},
+    {"step_id": 3, "tool": "visualize", "params": {"type": "bar", "x": "actor", "y": "screen_time"}}
+  ]
+}
 ```
-OPENAI_API_KEY=sk-xxxx
-SCRAPER_HEADLESS=true
-API_BASE_URL=https://example.com/api
+
+2. **Executor** runs step 1, passes to **Verifier**.
+3. If verification passes, moves to step 2.
+4. On a failed verification, invokes **Replanner**.
+5. Final result formatted and returned.
+
+---
+
+## 6. Error Handling & Fallbacks
+
+- **Tool Failure** → retry with different params (via Replanner)
+- **LLM Parse Error** → retry with stricter output formatting prompt
+- **Verifier Low Score** → step re-execution or alternate tool
+
+---
+
+## 7. Observability & Logging
+
+- Structured JSON logs for every step:
+
+```json
+{
+  "step_id": 2,
+  "tool": "fetch_web",
+  "input": {"query": "cast members..."},
+  "output_preview": "...",
+  "verification_score": 0.92,
+  "status": "success"
+}
+```
+
+- Logs stored locally + optional Elastic/Prometheus integration.
+
+---
+
+## 8. Testing
+
+- **Unit tests** for each tool
+- **Prompt tests** with mocked LLM responses
+- **End-to-end tests** with sample queries
+- **Failure simulations** to test replanning
+
+---
+
+## 9. Deployment
+
+- **Dockerfile** with multi-stage build (slim Python runtime)
+- `.env.example` for API keys (OpenAI, search APIs)
+- **docker-compose.yml** for local dev
+- FastAPI exposed on port 8080
+
+---
+
+## 10. Example `.env.example`
+
+```
+OPENAI_API_KEY=your_key
+SEARCH_API_KEY=your_key
+ENV=dev
+LOG_LEVEL=debug
 ```
 
 ---
 
-## 7. Testing Strategy
-**Test Script Structure** (`tests/` directory):
-- `test_scraper.py`: Tests for HTML/API extraction.
-- `test_csv_loader.py`: Tests for CSV → DuckDB.
-- `test_orchestration.py`: Mocked LLM responses to verify step planning.
-- `test_api.py`: API endpoint tests.
+## 11. Advantages Over Original LangChain Version
 
-**Example Test Cases**
-1. **Case 1**: CSV ingestion + SQL query in DuckDB.
-2. **Case 2**: Web scraping of static table → answer generation.
+- **Transparent flow** instead of hidden chains
+- **Easier debugging** (each step is visible & logged)
+- **Better testability** (tools & planner separable)
+- **More maintainable** (no nested callbacks/agents)
+- **Vendor flexibility** (swap LLM providers easily)
 
 ---
 
-## 8. File/Folder Structure
-```
-project/
-│── main.py               # FastAPI entrypoint
-│── orchestrator.py       # LLM orchestration logic
-│── ingestion/
-│   ├── scraper.py        # Web scraping module
-│   ├── csv_loader.py     # CSV ingestion
-│   ├── api_fetcher.py    # API ingestion
-│── prompts/
-│   ├── question.txt      # Prompt for scraping decision
-│   ├── validation.txt    # Prompt for cross-verification
-│── storage/
-│   ├── duckdb_store.py   # DuckDB wrapper
-│── tests/
-│   ├── test_scraper.py
-│   ├── test_csv_loader.py
-│   ├── test_orchestration.py
-│── requirements.txt
-│── Dockerfile
-│── docker-compose.yml
-│── .env.example
-```
+## 12. Future Extensions
+
+- Multi-turn conversational mode
+- Caching of frequent queries
+- Streaming partial results
+- Interactive visualizations in the UI
+- Offline mode using local LLM
 
 ---
 
-## 9. References
+## References
 - [Jivraj-18/p2-demo-05-2025](https://github.com/Jivraj-18/p2-demo-05-2025)
-- [TDS_Project2 – LangChain Implementation](https://github.com/tunafishhyyyy/TDS_Project2/tree/main/Project2)
+- [TDS_Project2 – LangChain version of this project my initial attempt on this project, has multiple issues.](https://github.com/tunafishhyyyy/TDS_Project2/tree/main/Project2)
