@@ -75,45 +75,102 @@ class PlannerClient:
                 query_lower = query.lower()
                 context_str = json.dumps(context or {}).lower()
                 if any(k in query_lower or k in context_str for k in keywords):
-                    # Minimal DuckDB plan: run SQL query, then analyze
-                    duckdb_query = (
-                        "SELECT * FROM data LIMIT 10"
-                        # Default, can be improved
-                    )
                     # Try to extract a SQL query from the user query if present
                     import re
                     sql_match = re.search(
                         r"SELECT[\s\S]+?;", query, re.IGNORECASE
                     )
                     if sql_match:
-                        duckdb_query = sql_match.group(0)
-                    basic_steps = [
-                        ExecutionStep(
-                            step_id=1,
-                            tool=ToolType.DUCKDB_RUNNER,
-                            params={
-                                "query": duckdb_query
-                            },
-                            expected_output=(
-                                "Data loaded and queried from DuckDB"
+                        # Use the extracted SQL query directly
+                        basic_steps = [
+                            ExecutionStep(
+                                step_id=1,
+                                tool=ToolType.DUCKDB_RUNNER,
+                                params={
+                                    "query": sql_match.group(0)
+                                },
+                                expected_output=(
+                                    "Results from provided SQL query"
+                                ),
+                                status=StepStatus.PENDING
                             ),
-                            status=StepStatus.PENDING
-                        ),
-                        ExecutionStep(
-                            step_id=2,
-                            tool=ToolType.ANALYZE,
-                            params={
-                                "input": "output_of_step_1",
-                                "operation": "llm_answer",
-                                "query": query
-                            },
-                            expected_output=(
-                                "LLM answers to user questions "
-                                "using the DuckDB data"
+                            ExecutionStep(
+                                step_id=2,
+                                tool=ToolType.ANALYZE,
+                                params={
+                                    "input": "output_of_step_1",
+                                    "operation": "llm_answer",
+                                    "query": query
+                                },
+                                expected_output=(
+                                    "LLM answers using SQL query results"
+                                ),
+                                status=StepStatus.PENDING
+                            )
+                        ]
+                    else:
+                        # Generic fallback: run extracted SQL + analyze
+                        # Try to find any SQL in context or use generic query
+                        context_sql = None
+                        if context:
+                            context_str = json.dumps(context)
+                            sql_in_context = re.search(
+                                r"SELECT[\s\S]+?;", context_str, re.IGNORECASE
+                            )
+                            if sql_in_context:
+                                context_sql = sql_in_context.group(0)
+                        
+                        # Use SQL from context/query, else generic sample
+                        if context_sql:
+                            query_to_run = context_sql
+                        else:
+                            query_to_run = "SELECT * FROM data LIMIT 100"
+                        
+                        basic_steps = [
+                            ExecutionStep(
+                                step_id=1,
+                                tool=ToolType.DUCKDB_RUNNER,
+                                params={
+                                    "query": query_to_run
+                                },
+                                expected_output="Sample data and schema info",
+                                status=StepStatus.PENDING
                             ),
-                            status=StepStatus.PENDING
-                        )
-                    ]
+                            ExecutionStep(
+                                step_id=2,
+                                tool=ToolType.ANALYZE,
+                                params={
+                                    "input": "output_of_step_1",
+                                    "operation": "generate_sql",
+                                    "query": query,
+                                    "context": context
+                                },
+                                expected_output="SQL queries for analysis",
+                                status=StepStatus.PENDING
+                            ),
+                            ExecutionStep(
+                                step_id=3,
+                                tool=ToolType.DUCKDB_RUNNER,
+                                params={
+                                    "query": "output_of_step_2"
+                                },
+                                expected_output="Analysis results",
+                                status=StepStatus.PENDING
+                            ),
+                            ExecutionStep(
+                                step_id=4,
+                                tool=ToolType.ANALYZE,
+                                params={
+                                    "input": "output_of_step_3",
+                                    "operation": "llm_answer",
+                                    "query": query
+                                },
+                                expected_output=(
+                                    "LLM answers using analysis results"
+                                ),
+                                status=StepStatus.PENDING
+                            )
+                        ]
                     plan = ExecutionPlan(steps=basic_steps)
                     logger.info(
                         f"Generated DuckDB fallback plan with "

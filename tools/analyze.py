@@ -94,20 +94,92 @@ def analyze(params: Dict[str, Any]) -> Dict[str, Any]:
                     if "convert to int" in rule:
                         cleaned_df[col] = pd.to_numeric(cleaned_df[col], errors="coerce").astype('Int64')
             return {"status": "success", "data": cleaned_df.to_dict("records"), "columns": list(cleaned_df.columns)}
+        elif operation == "generate_sql":
+            # Generate SQL queries based on user questions and data schema
+            from app.llm_client import llm_client
+            
+            # Get schema from the data
+            schema_info = {
+                "columns": df.columns.tolist(),
+                "dtypes": df.dtypes.to_dict(),
+                "sample_rows": df.head(5).to_dict("records")
+            }
+            
+            user_query = params.get("query", "")
+            context = params.get("context", {})
+            
+            # Extract table reference from context if available
+            table_ref = "data"  # default
+            if context:
+                context_str = json.dumps(context)
+                # Look for read_parquet or table patterns
+                import re
+                parquet_match = re.search(
+                    r"read_parquet\(['\"]([^'\"]+)['\"]", context_str
+                )
+                if parquet_match:
+                    table_ref = f"read_parquet('{parquet_match.group(1)}')"
+            
+            prompt = (
+                "You are a SQL expert. Given the user questions and table "
+                "schema, generate the specific SQL queries needed to answer "
+                "each question.\n\n"
+                f"Table Reference: {table_ref}\n"
+                f"Schema: {json.dumps(schema_info, indent=2)}\n\n"
+                f"User Questions: {user_query}\n\n"
+                "Generate SQL queries that will provide the data needed to "
+                "answer each question. Return only the SQL query string(s), "
+                "separated by semicolons if multiple queries are needed. "
+                "Do not include explanations."
+            )
+            
+            messages = [
+                {"role": "system", "content": "You are a SQL expert."},
+                {"role": "user", "content": prompt}
+            ]
+            
+            sql_response = llm_client.generate_completion(messages)
+            return {"status": "success", "data": sql_response}
         elif operation == "llm_answer":
             # Use LLM to answer questions over the DataFrame
             from app.llm_client import llm_client
-            # Convert DataFrame to JSON string (limit rows for prompt size)
-            data_json = df.head(30).to_json(orient="records")
-            user_query = params.get("query", "")
-            prompt = (
-                "You are a data analysis expert. Given the following table data (as JSON) and user questions, "
-                "answer the questions as a JSON array of strings.\n\n"
-                f"Table Data (first 30 rows):\n{data_json}\n\nUser Query:\n{user_query}\n\n"
-                "Return only a JSON array of strings, no explanations."
-            )
+            
+            # Handle schema and sample parameters if provided
+            schema_info = params.get("schema")
+            sample_data = params.get("sample")
+            
+            if schema_info and sample_data:
+                # Use schema and sample for better context
+                prompt = (
+                    "You are a data analysis expert. Given the following "
+                    "table schema and sample data, answer the user questions "
+                    "as a JSON array of strings.\n\n"
+                    f"Table Schema:\n{json.dumps(schema_info, indent=2)}\n\n"
+                    f"Sample Data:\n{json.dumps(sample_data, indent=2)}\n\n"
+                    f"User Query:\n{params.get('query', '')}\n\n"
+                    "Based on the schema and sample, provide specific answers. "
+                    "If you need to perform calculations or analysis, describe "
+                    "the SQL queries or steps needed. Return only a JSON array "
+                    "of strings, no explanations."
+                )
+            else:
+                # Fallback to original DataFrame approach
+                data_json = df.head(30).to_json(orient="records")
+                user_query = params.get("query", "")
+                prompt = (
+                    "You are a data analysis expert. Given the following "
+                    "table data (as JSON) and user questions, answer the "
+                    "questions as a JSON array of strings.\n\n"
+                    f"Table Data (first 30 rows):\n{data_json}\n\n"
+                    f"User Query:\n{user_query}\n\n"
+                    "Return only a JSON array of strings, no explanations."
+                )
+            
             messages = [
-                {"role": "system", "content": "You are a helpful data analysis assistant."},
+                {
+                    "role": "system", 
+                    "content": "You are a helpful data analysis assistant."
+                },
                 {"role": "user", "content": prompt}
             ]
             llm_response = llm_client.generate_json_response(messages)

@@ -1,17 +1,33 @@
-#Issue1 : Wikipedia example is not working Here is the current output for the wikipedia example  :
+The output only included a count of total judgments (count_star(): 15901854) and a generic explanation of how to answer the questions, not the actual answers.
+The LLM response stated that the answers are "not directly available from the provided data" and described the process, but did not compute or return the specific results for:
+Which high court disposed the most cases from 2019–2022
+The regression slope for delay in court=33_10
+The actual plot as a meaningful base64 image (the image string is just a placeholder)
+Reason:
+The fallback DuckDB query did not provide the grouped, regression, or plot data needed for the LLM to answer directly. Only a count and a sample row were available.
 
-{
-    "detail": "Processing failed"
-}
+To get correct answers:
+The DuckDB step must run the actual analysis queries (group by, regression, etc.) and pass those results to the LLM/analyze step.
 
+Let me know if you want to update the fallback logic to generate and run these specific queries automatically.
 
-whereas it should have answered the four questions.
-1. How many $2 bn movies were released before 2000?
-2. Which is the earliest film that grossed over $1.5 bn?
-3. What's the correlation between the Rank and Peak?
-4. Draw a scatterplot of Rank and Peak along with a dotted red regression line through it.
+What works:
 
-full server logs are present in logs/app.log
+DuckDB is used for querying the Parquet dataset.
+The fallback plan does not use fetch_web for this structured data.
+What needs improvement:
+
+The DuckDB query in the fallback is too generic (SELECT * FROM data LIMIT 10 or just a count).
+The LLM needs to be given the actual results of grouped counts, regression, and delay calculations, not just a sample or count.
+Next steps:
+
+Improve the fallback DuckDB query to:
+Group by court and count for 2019-2022.
+Calculate delay and regression for court=33_10.
+Return results that the LLM can use to answer the questions directly.
+Optionally, add logic to extract and run relevant SQL queries from the user question if present.
+Would you like me to update the fallback logic to generate more specific DuckDB queries for these common analysis patterns, so the LLM receives the right data to answer?
+
 
 
 == Important Instructions ==
