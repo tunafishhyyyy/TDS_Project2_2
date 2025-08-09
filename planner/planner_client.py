@@ -13,6 +13,7 @@ class PlannerClient:
     
     def __init__(self):
         self.prompt_template = self._load_prompt_template()
+        self.llm_request_count = 0  # Track LLM requests for cost monitoring
     
     def _load_prompt_template(self) -> str:
         """Load prompt template from file"""
@@ -67,6 +68,7 @@ Return JSON: {"tool": "tool_name", "params": {...}, "reasoning": "..."}
                     
                     # Get tool refinement from LLM
                     response = llm_client.generate_completion(messages, json_mode=True)
+                    self.llm_request_count += 1  # Track refinement LLM usage
                     logger.info(f"Tool refinement response: {response}")
                     logger.info(f"Response type: {type(response)}")
                     
@@ -113,41 +115,31 @@ Return JSON: {"tool": "tool_name", "params": {...}, "reasoning": "..."}
         # ...existing code...
         pass
 
-    def generate_plan(self, query: Optional[str] = None, 
-                      context: Optional[Dict[str, Any]] = None, 
+    def generate_plan(self, query: Optional[str] = None,
+                      context: Optional[Dict[str, Any]] = None,
                       question_file: Optional[str] = None) -> ExecutionPlan:
-        """Generate execution plan using only the primary LLM client. 
-        Supports referencing question from a file."""
-        # If question_file is provided, handle it with separate messages
+        """Generate execution plan with schema extraction as the first step."""
+        # Step 1: Prepare the user question
         if question_file:
             try:
                 with open(question_file, "r") as f:
                     question_text = f.read()
                 logger.info(f"Read question from file: {question_file}")
-                
-                # Create system prompt with instructions only
                 system_prompt = self.prompt_template.format(
                     context=json.dumps(context or {}, indent=2)
                 )
-                
                 messages = [
-                    {"role": "system", 
-                     "content": system_prompt},
-                    {"role": "user", 
-                     "content": f"Here is the user's question from file {question_file}:\n\n{question_text}"}
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Here is the user's question from file {question_file}:\n\n{question_text}"}
                 ]
-                
             except Exception as e:
                 error_msg = f"Failed to read question file {question_file}: {e}"
                 logger.error(error_msg)
-                # Fallback to standard approach
-                prompt = (self.prompt_template + 
-                         f"\n\nERROR: Could not read question file " +
-                         f"{question_file}. Please ensure the file exists.")
+                prompt = (self.prompt_template +
+                          f"\n\nERROR: Could not read question file " +
+                          f"{question_file}. Please ensure the file exists.")
                 messages = [
-                    {"role": "system",
-                     "content": ("You are an expert data analysis planner. " +
-                                "Return only valid JSON.")},
+                    {"role": "system", "content": "You are an expert data analysis planner. Return only valid JSON."},
                     {"role": "user", "content": prompt}
                 ]
         else:
@@ -156,19 +148,158 @@ Return JSON: {"tool": "tool_name", "params": {...}, "reasoning": "..."}
                 context=json.dumps(context or {}, indent=2)
             )
             messages = [
-                {"role": "system",
-                 "content": ("You are an expert data analysis planner. " +
-                            "Return only valid JSON.")},
+                {"role": "system", "content": "You are an expert data analysis planner. Return only valid JSON."},
                 {"role": "user", "content": prompt}
             ]
+
+        # Step 2: Always add schema extraction as the first step
+        # Collect all input files (question.txt and others) for schema extraction
+        input_files = []
+        if question_file:
+            input_files.append(question_file)
+        # If context contains files, add them too
+        if context and isinstance(context, dict):
+            files_from_context = context.get("files")
+            if files_from_context and isinstance(files_from_context, list):
+                input_files.extend(files_from_context)
+        # If no files, fallback to question_file only
+        if not input_files and question_file:
+            input_files = [question_file]
+        schema_step = ExecutionStep(
+            step_id=1,
+            tool=ToolType.ANALYZE,
+            params={
+                "task": "Analyze the structure of the relevant dataset and return a dict of fields and their types as JSON.",
+                "data": input_files
+            },
+            expected_output="A dict of fields and their types as JSON.",
+            status=StepStatus.PENDING
+        )
+        logger.info(f"[SCHEMA] Added schema extraction step as step 1 with data={input_files}.")
+
+        # Step 3: Get the rest of the plan from LLM
         response = llm_client.generate_json_response(messages)
-        
-        # Log the interaction - use appropriate format based on structure
+        self.llm_request_count += 1
         if question_file:
             log_content = f"Question file: {question_file}"
         else:
             log_content = prompt
         llm_logger_info(log_content, response)
+
+        # Step 4: Parse LLM response into steps
+        logger.info(f"Raw response: {response}")
+        logger.info(f"Response type: {type(response)}")
+        steps = [schema_step]
+        response_json = None
+        if isinstance(response, dict):
+            try:
+                response_json = json.loads(json.dumps(response))
+            except Exception as e:
+                error_msg = f"Dict to JSON conversion failed: {str(e)}"
+                execution_logger_info(0, "planner", "failed", error=error_msg)
+                response_json = None
+        elif isinstance(response, list):
+            response_json = response
+        elif isinstance(response, str):
+            response_clean = response.strip()
+            if response_clean.startswith("```json"):
+                response_clean = response_clean[7:]
+            if response_clean.startswith("```"):
+                response_clean = response_clean[3:]
+            if response_clean.endswith("```"):
+                response_clean = response_clean[:-3]
+            response_clean = response_clean.strip()
+            try:
+                response_json = json.loads(response_clean)
+            except Exception as e:
+                error_msg = f"String to JSON parsing failed: {str(e)}"
+                execution_logger_info(0, "planner", "failed", error=error_msg)
+                response_json = None
+        else:
+            response_json = None
+
+        # Step 5: Add subsequent steps from LLM response
+        if response_json:
+            logger.info(f"Processing LLM response: {response_json}")
+            logger.info(f"Response type: {type(response_json)}")
+            if isinstance(response_json, list) and all(isinstance(task, str) for task in response_json):
+                logger.info(f"Found simple task array with {len(response_json)} tasks")
+                for i, task_description in enumerate(response_json, 2):
+                    step = ExecutionStep(
+                        step_id=i,
+                        tool=ToolType("analyze"),
+                        params={"task": task_description},
+                        expected_output=f"Result for: {task_description}",
+                        status=StepStatus.PENDING
+                    )
+                    steps.append(step)
+                    execution_logger_info(step.step_id, step.tool, step.status)
+            elif isinstance(response_json, dict) and response_json.get("steps"):
+                logger.info("Found 'steps' array in response")
+                step_list = response_json["steps"]
+                for idx, step_data in enumerate(step_list, 2):
+                    step_id = step_data.get("step_id", idx)
+                    tool = step_data.get("tool", "analyze")
+                    params = step_data.get("params", {})
+                    expected_output = step_data.get("expected_output", "")
+                    try:
+                        step = ExecutionStep(
+                            step_id=step_id,
+                            tool=ToolType(tool),
+                            params=params,
+                            expected_output=expected_output,
+                            status=StepStatus.PENDING
+                        )
+                        steps.append(step)
+                        execution_logger_info(step.step_id, step.tool, step.status)
+                    except Exception as e:
+                        error_msg = f"Step parsing error: {str(e)}"
+                        execution_logger_info(0, "planner", "failed", error=error_msg)
+            elif isinstance(response_json, dict) and response_json.get("step_id") and response_json.get("tool"):
+                logger.warning("LLM returned single step instead of steps array, wrapping it")
+                step_list = [response_json]
+                for idx, step_data in enumerate(step_list, 2):
+                    step_id = step_data.get("step_id", idx)
+                    tool = step_data.get("tool", "analyze")
+                    params = step_data.get("params", {})
+                    expected_output = step_data.get("expected_output", "")
+                    try:
+                        step = ExecutionStep(
+                            step_id=step_id,
+                            tool=ToolType(tool),
+                            params=params,
+                            expected_output=expected_output,
+                            status=StepStatus.PENDING
+                        )
+                        steps.append(step)
+                        execution_logger_info(step.step_id, step.tool, step.status)
+                    except Exception as e:
+                        error_msg = f"Step parsing error: {str(e)}"
+                        execution_logger_info(0, "planner", "failed", error=error_msg)
+            else:
+                error_msg = (f"LLM response has no recognizable format (steps array, "
+                           f"single step, or task array): {response_json}")
+                logger.error(error_msg)
+
+        # Step 6: Refine generic analyze steps (except schema step)
+        if len(steps) > 1 and all(step.tool == ToolType.ANALYZE and "task" in step.params for step in steps[1:]):
+            logger.info("Refining generic tasks into specific tool calls (excluding schema step)")
+            refined_steps = self._refine_tasks_to_tools(steps[1:], context)
+            steps = [steps[0]] + refined_steps
+
+        plan = ExecutionPlan(steps=steps)
+        plan_str = str(plan)
+        if len(plan_str) > 500:
+            plan_str = plan_str[:500] + '...'
+        execution_logger_info(0, "planner", f"plan={plan_str}")
+        execution_logger_info(0, "planner", "success")
+        plan.planning_stats = {
+            "llm_requests_used": self.llm_request_count,
+            "tasks_generated": len(steps),
+            "tasks_refined": sum(1 for step in steps if step.tool != ToolType.ANALYZE or "task" not in step.params),
+            "planning_approach": "modular_two_stage" if steps and any(step.tool != ToolType.ANALYZE for step in steps) else "single_stage"
+        }
+        return plan
 
         # Parse response
         logger.info(f"Raw response: {response}")
@@ -292,6 +423,15 @@ Return JSON: {"tool": "tool_name", "params": {...}, "reasoning": "..."}
             plan_str = plan_str[:500] + '...'
         execution_logger_info(0, "planner", f"plan={plan_str}")
         execution_logger_info(0, "planner", "success")
+        
+        # Add planning statistics to the plan metadata
+        plan.planning_stats = {
+            "llm_requests_used": self.llm_request_count,
+            "tasks_generated": len(steps),
+            "tasks_refined": sum(1 for step in steps if step.tool != ToolType.ANALYZE or "task" not in step.params),
+            "planning_approach": "modular_two_stage" if steps and any(step.tool != ToolType.ANALYZE for step in steps) else "single_stage"
+        }
+        
         return plan
 
 

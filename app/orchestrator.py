@@ -80,38 +80,63 @@ class Orchestrator:
             logger.info(plan_msg)
             previous_context = {}
             answers = []
+            schema = None
             i = 0
             while i < len(plan.steps):
                 step = plan.steps[i]
+                # If this is the data_analysis step, capture schema
+                if step.tool == "analyze" and step.params.get("task") == "data_structure":
+                    logger.info(f"[DEBUG] Running data structure analysis step (step_id={step.step_id})")
+                    result = await self._execute_step(step, previous_context)
+                    logger.info(f"[DEBUG] Data structure analysis step result: {result}")
+                    if result is None:
+                        logger.warning(f"[SCHEMA] Data structure analysis step failed to produce any result.")
+                    elif not isinstance(result, dict):
+                        logger.warning(f"[SCHEMA] Data structure analysis result is not a dict: {type(result)}")
+                    elif "fields" not in result:
+                        logger.warning(f"[SCHEMA] Data structure analysis result missing 'fields' key. Keys: {list(result.keys())}")
+                    else:
+                        schema = result["fields"]
+                        previous_context["schema"] = schema
+                        logger.info(f"[SCHEMA] Data structure analysis result: {json.dumps(schema, indent=2)}")
+                    previous_context[f"step_{step.step_id}"] = result
+                    formatted_result = self._format_step_result(step, result)
+                    if formatted_result:
+                        answers.append(str(formatted_result))
+                    i += 1
+                    continue
                 # If step_type is 'llm_query', refine it before execution
                 if hasattr(step, 'step_type') and step.step_type == "llm_query":
                     logger.info(f"Refining step {step.step_id} with LLM (step_type=llm_query)")
                     # Use planner_client to further decompose/refine this step
+                    # Pass schema as context if available
+                    refine_context = previous_context.copy()
+                    if schema:
+                        refine_context["schema"] = schema
                     refined_plan = planner_client.generate_plan(
                         query=step.expected_output,
-                        context=previous_context
+                        context=refine_context
                     )
                     # Replace the llm_query step with its refined steps
                     plan.steps = plan.steps[:i] + refined_plan.steps + plan.steps[i+1:]
                     steps_count = len(plan.steps)
-                    # Do not increment i, process the new steps at this index
                     continue
-                # Only execute 'action' steps
-                result = await self._execute_step(step, previous_context)
+                # For all other steps, pass schema in context if available
+                exec_context = previous_context.copy()
+                if schema:
+                    exec_context["schema"] = schema
+                result = await self._execute_step(step, exec_context)
                 if result is None:
                     success = await self._handle_step_failure(
-                        plan, step, previous_context)
+                        plan, step, exec_context)
                     if not success:
                         step_id = step.step_id
                         error_msg = f"Plan execution failed at step {step_id}"
                         logger.error(error_msg)
-                        # Return partial answers if any, else error string
                         return answers if answers else ["Processing failed"]
                 else:
                     previous_context[f"step_{step.step_id}"] = result
-                    # Always format result as a string for API output
                     formatted_result = self._format_step_result(step, result)
-                    # Fallback: if analyze step, format summary as string
                     if not formatted_result and step.tool == "analyze":
                         if isinstance(result, dict) and "data" in result:
                             import numpy as np

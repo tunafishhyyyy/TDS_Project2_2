@@ -41,6 +41,7 @@ class ExecutionPlan(BaseModel):
     steps: List[ExecutionStep]
     plan_id: str = Field(default_factory=lambda: f"plan_{int(time.time())}")
     created_at: Optional[str] = None
+    planning_stats: Optional[Dict[str, Any]] = None  # Planning statistics and metadata
 
 
 class QueryRequest(BaseModel):
