@@ -94,39 +94,44 @@ async def process_data_analysis(request: Request):
         query_text = None
         question_file_path = None
 
+        # Explicitly handle required parameter names
         for key in form:
             value = form[key]
             if hasattr(value, "filename"):
                 filename = value.filename or key
                 content = await value.read()
-                # Handle different file types
-                if filename.endswith((".txt", ".md")):
+                # Map expected parameter names to file types
+                if key == "questions.txt":
                     text_content = content.decode("utf-8")
-                    if not query_text:
-                        query_text = text_content
-                        # Save the question as a file for planner reference
-                        question_file_path = f"/tmp/question_{int(time.time())}.txt"
-                        with open(question_file_path, "w", encoding="utf-8") as f:
-                            f.write(text_content)
-                    file_data[filename] = text_content
-                elif filename.endswith((".csv", ".json", ".xlsx")):
+                    query_text = text_content
+                    question_file_path = f"/tmp/questions_{int(time.time())}.txt"
+                    with open(question_file_path, "w", encoding="utf-8") as f:
+                        f.write(text_content)
+                    file_data[key] = text_content
+                elif key == "data.csv":
+                    temp_path = f"/tmp/data_{int(time.time())}.csv"
+                    with open(temp_path, "wb") as f:
+                        f.write(content)
+                    file_data[key] = temp_path
+                elif key == "image.png":
+                    temp_path = f"/tmp/image_{int(time.time())}.png"
+                    with open(temp_path, "wb") as f:
+                        f.write(content)
+                    file_data[key] = temp_path
+                else:
+                    # Fallback for other files
                     temp_path = f"/tmp/{filename}"
                     with open(temp_path, "wb") as f:
                         f.write(content)
-                    file_data[filename] = temp_path
-                elif filename.endswith((".png", ".jpg", ".jpeg")):
-                    temp_path = f"/tmp/{filename}"
-                    with open(temp_path, "wb") as f:
-                        f.write(content)
-                    file_data[filename] = temp_path
+                    file_data[key] = temp_path
             else:
                 # Non-file fields (e.g., text prompt)
-                if not query_text:
+                if key == "questions.txt" and not query_text:
                     query_text = str(value)
-                    # Save the question as a file for planner reference
-                    question_file_path = f"/tmp/question_{int(time.time())}.txt"
+                    question_file_path = f"/tmp/questions_{int(time.time())}.txt"
                     with open(question_file_path, "w", encoding="utf-8") as f:
                         f.write(query_text)
+                    file_data[key] = query_text
 
         if not query_text:
             raise HTTPException(
