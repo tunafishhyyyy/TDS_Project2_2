@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, List
 import uvicorn
 import tempfile
 import os
+import time
 
 from app.models import QueryRequest, QueryResponse
 from app.orchestrator import orchestrator
@@ -91,6 +92,7 @@ async def process_data_analysis(request: Request):
         form = await request.form()
         file_data = {}
         query_text = None
+        question_file_path = None
 
         for key in form:
             value = form[key]
@@ -102,6 +104,10 @@ async def process_data_analysis(request: Request):
                     text_content = content.decode("utf-8")
                     if not query_text:
                         query_text = text_content
+                        # Save the question as a file for planner reference
+                        question_file_path = f"/tmp/question_{int(time.time())}.txt"
+                        with open(question_file_path, "w", encoding="utf-8") as f:
+                            f.write(text_content)
                     file_data[filename] = text_content
                 elif filename.endswith((".csv", ".json", ".xlsx")):
                     temp_path = f"/tmp/{filename}"
@@ -117,6 +123,10 @@ async def process_data_analysis(request: Request):
                 # Non-file fields (e.g., text prompt)
                 if not query_text:
                     query_text = str(value)
+                    # Save the question as a file for planner reference
+                    question_file_path = f"/tmp/question_{int(time.time())}.txt"
+                    with open(question_file_path, "w", encoding="utf-8") as f:
+                        f.write(query_text)
 
         if not query_text:
             raise HTTPException(
@@ -124,10 +134,14 @@ async def process_data_analysis(request: Request):
                 detail="No query text found in uploaded files or form data"
             )
 
-        # Create request with file context
+        # Create request with file context and question file
+        context = {"files": file_data}
+        if question_file_path:
+            context["question_file"] = question_file_path
+            
         query_request = QueryRequest(
             query=query_text,
-            context={"files": file_data},
+            context=context,
             files=list(file_data.keys())
         )
 

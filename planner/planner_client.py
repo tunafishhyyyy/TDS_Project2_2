@@ -44,38 +44,90 @@ class PlannerClient:
         User Query: {query}
         """
     
-    def generate_plan_backup(self, query: str, context: Optional[Dict[str, Any]] = None) -> ExecutionPlan:
+    def generate_plan_backup(self, query: str, 
+                           context: Optional[Dict[str, Any]] = None
+                           ) -> ExecutionPlan:
         """Backup of the original generate_plan method for reference."""
         # ...existing code...
         pass
 
-    def generate_plan(self, query: str, context: Optional[Dict[str, Any]] = None) -> ExecutionPlan:
-        """Generate execution plan using only the primary LLM client."""
-        # Prepare prompt
-        prompt = self.prompt_template.format(
-            query=query,
-            context=json.dumps(context or {}, indent=2)
-        )
-
-        messages = [
-            {"role": "system", "content": "You are an expert data analysis planner. Return only valid JSON."},
-            {"role": "user", "content": prompt}
-        ]
+    def generate_plan(self, query: Optional[str] = None, 
+                      context: Optional[Dict[str, Any]] = None, 
+                      question_file: Optional[str] = None) -> ExecutionPlan:
+        """Generate execution plan using only the primary LLM client. 
+        Supports referencing question from a file."""
+        # If question_file is provided, handle it with separate messages
+        if question_file:
+            try:
+                with open(question_file, "r") as f:
+                    question_text = f.read()
+                logger.info(f"Read question from file: {question_file}")
+                
+                # Create system prompt with instructions only
+                system_prompt = self.prompt_template.format(
+                    context=json.dumps(context or {}, indent=2)
+                )
+                
+                messages = [
+                    {"role": "system", 
+                     "content": ("You are an expert data analysis planner. " +
+                                "Return only valid JSON.")},
+                    {"role": "assistant", 
+                     "content": system_prompt},
+                    {"role": "user", 
+                     "content": (f"Here is the user's question (from file " +
+                                f"{question_file}):\n\n{question_text}\n\n" +
+                                "Please create a detailed execution plan for " +
+                                "this question.")}
+                ]
+                
+            except Exception as e:
+                error_msg = f"Failed to read question file {question_file}: {e}"
+                logger.error(error_msg)
+                # Fallback to standard approach
+                prompt = (self.prompt_template + 
+                         f"\n\nERROR: Could not read question file " +
+                         f"{question_file}. Please ensure the file exists.")
+                messages = [
+                    {"role": "system",
+                     "content": ("You are an expert data analysis planner. " +
+                                "Return only valid JSON.")},
+                    {"role": "user", "content": prompt}
+                ]
+        else:
+            prompt = self.prompt_template.format(
+                query=query or "",
+                context=json.dumps(context or {}, indent=2)
+            )
+            messages = [
+                {"role": "system",
+                 "content": ("You are an expert data analysis planner. " +
+                            "Return only valid JSON.")},
+                {"role": "user", "content": prompt}
+            ]
         response = llm_client.generate_json_response(messages)
-        llm_logger_info(prompt, response)
+        
+        # Log the interaction - use appropriate format based on structure
+        if question_file:
+            log_content = f"Question file: {question_file}"
+        else:
+            log_content = prompt
+        llm_logger_info(log_content, response)
 
         # Parse response
         if isinstance(response, dict):
             try:
                 response_json = json.loads(json.dumps(response))
             except Exception as e:
-                execution_logger_info(0, "planner", "failed", error=f"Dict to JSON conversion failed: {str(e)}")
+                error_msg = f"Dict to JSON conversion failed: {str(e)}"
+                execution_logger_info(0, "planner", "failed", error=error_msg)
                 response_json = None
         elif isinstance(response, str):
             try:
                 response_json = json.loads(response)
             except Exception as e:
-                execution_logger_info(0, "planner", "failed", error=f"String to JSON parsing failed: {str(e)}")
+                error_msg = f"String to JSON parsing failed: {str(e)}"
+                execution_logger_info(0, "planner", "failed", error=error_msg)
                 response_json = None
         else:
             response_json = None
@@ -90,10 +142,13 @@ class PlannerClient:
                 step_list = response_json["steps"]
             # Handle case where LLM returns a single step object (malformed)
             elif response_json.get("step_id") and response_json.get("tool"):
-                logger.warning("LLM returned single step instead of steps array, wrapping it")
+                logger.warning("LLM returned single step instead of steps " +
+                              "array, wrapping it")
                 step_list = [response_json]
             else:
-                logger.error(f"LLM response has no 'steps' array or valid step format: {response_json}")
+                error_msg = ("LLM response has no 'steps' array or valid " +
+                            f"step format: {response_json}")
+                logger.error(error_msg)
                 step_list = []
             
             logger.info(f"Processing {len(step_list)} steps")
@@ -114,7 +169,8 @@ class PlannerClient:
                     steps.append(step)
                     execution_logger_info(step.step_id, step.tool, step.status)
                 except Exception as e:
-                    execution_logger_info(0, "planner", "failed", error=f"Step parsing error: {str(e)}")
+                    error_msg = f"Step parsing error: {str(e)}"
+                    execution_logger_info(0, "planner", "failed", error=error_msg)
 
         plan = ExecutionPlan(steps=steps)
         plan_str = str(plan)
@@ -220,9 +276,11 @@ class ReplannerClient:
                         logger.error(f"Failed to create step: {step_error}")
                         continue
             
-            # If no steps were created and we had response_steps, create a fallback
+            # If no steps were created and we had response_steps, 
+            # create a fallback
             if not steps and response_steps:
-                logger.warning("No valid steps created from response, using fallback retry step")
+                logger.warning("No valid steps created from response, " +
+                              "using fallback retry step")
                 step = ExecutionStep(
                     step_id=failed_step.step_id,
                     tool=failed_step.tool,

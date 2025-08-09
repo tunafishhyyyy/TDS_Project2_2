@@ -29,7 +29,7 @@ class Config:
     # LLM Settings
     LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4")
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.1"))
-    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "4000"))
+    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "16000"))
 
     # Hugging Face Inference API
     HF_API_TOKEN: Optional[str] = os.getenv("HF_API_TOKEN")

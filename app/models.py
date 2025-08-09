@@ -29,6 +29,7 @@ class ExecutionStep(BaseModel):
     tool: ToolType
     params: Dict[str, Any]
     expected_output: str
+    step_type: str = "action"  # can be "action", "llm_query", "refine"
     status: StepStatus = StepStatus.PENDING
     output: Optional[Any] = None
     error: Optional[str] = None

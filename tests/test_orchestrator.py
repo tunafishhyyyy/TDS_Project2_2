@@ -47,6 +47,51 @@ def sample_execution_plan():
 
 
 class TestOrchestrator:
+    @pytest.mark.asyncio
+    async def test_llm_query_step_refinement(self, orchestrator):
+        """Test that llm_query steps are refined before execution"""
+        # Initial plan with an llm_query step
+        mock_plan = ExecutionPlan(steps=[
+            ExecutionStep(
+                step_id=1,
+                tool=ToolType.ANALYZE,
+                params={"operation": "summary"},
+                expected_output="Refine this step",
+                step_type="llm_query"
+            )
+        ])
+
+        # Refined plan returned by planner_client.generate_plan
+        refined_steps = [
+            ExecutionStep(
+                step_id=2,
+                tool=ToolType.ANALYZE,
+                params={"operation": "mean"},
+                expected_output="Mean value",
+                step_type="action"
+            ),
+            ExecutionStep(
+                step_id=3,
+                tool=ToolType.ANALYZE,
+                params={"operation": "median"},
+                expected_output="Median value",
+                step_type="action"
+            )
+        ]
+        refined_plan = ExecutionPlan(steps=refined_steps)
+
+        # Patch planner_client.generate_plan to return the refined plan
+        with patch('planner.planner_client.planner_client.generate_plan') as mock_planner:
+            with patch.object(orchestrator, '_execute_step') as mock_execute:
+                mock_planner.return_value = refined_plan
+                mock_execute.return_value = {"success": True}
+
+                # Simulate executing the initial plan
+                result = await orchestrator._execute_plan(mock_plan)
+
+                # Only the refined action steps should be executed
+                assert mock_execute.call_count == 2
+                assert result is not None
     
     @pytest.mark.asyncio
     async def test_process_query_success(self, orchestrator, sample_query_request):
@@ -106,23 +151,23 @@ class TestOrchestrator:
             params={"query": "test"},
             expected_output="Data"
         )
-        
+
         mock_tool_result = {"status": "success", "data": "some data"}
         mock_verification = MagicMock()
         mock_verification.passed = False
-        mock_verification.score = 0.3
+        mock_verification.score = 0.2  # Below acceptance threshold
         mock_verification.issues = ["Data quality low"]
-        
+
         with patch('tools.tool_registry.execute_tool') as mock_tool:
             with patch('tools.verifier.verifier_tool.verify_step') as mock_verify:
                 mock_tool.return_value = mock_tool_result
                 mock_verify.return_value = mock_verification
-                
+
                 result = await orchestrator._execute_step(step, {})
-                
-                assert result is None
-                assert step.status == StepStatus.FAILED
-                assert "Verification failed" in step.error
+
+        assert result is None
+        assert step.status == StepStatus.FAILED
+        assert "Verification failed" in step.error
     
     @pytest.mark.asyncio
     async def test_handle_step_failure(self, orchestrator, sample_execution_plan):

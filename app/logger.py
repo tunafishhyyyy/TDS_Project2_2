@@ -89,11 +89,7 @@ def execution_logger_info(step_id, tool, status, error=None):
     logger.bind(log_type="execution").info(msg)
 
 def llm_logger_info(question, answer):
-    q = str(question).replace('\n', ' ').replace('\r', ' ')
-    if len(q) > 120:
-        q = q[:120] + '...'
-    a = str(answer).replace('\n', ' ').replace('\r', ' ')
-    if len(a) > 200:
-        a = a[:200] + '...'
+    q = str(question).replace('\n', ' ').replace('\r', ' ')   
+    a = str(answer).replace('\n', ' ').replace('\r', ' ')   
     logger.bind(log_type="llm").info(f"LLM QUESTION: {q}")
     logger.bind(log_type="llm").info(f"LLM ANSWER: {a}")

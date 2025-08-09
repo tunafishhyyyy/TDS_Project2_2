@@ -29,10 +29,19 @@ class Orchestrator:
             logger.info(f"Processing query: {request.query}")
             
             # Step 1: Generate execution plan
-            plan = planner_client.generate_plan(
-                query=request.query,
-                context=request.context
-            )
+            question_file = request.context.get("question_file") if request.context else None
+            
+            if question_file:
+                logger.info(f"Using question file: {question_file}")
+                plan = planner_client.generate_plan(
+                    context=request.context,
+                    question_file=question_file
+                )
+            else:
+                plan = planner_client.generate_plan(
+                    query=request.query,
+                    context=request.context
+                )
             
             self.active_plans[plan.plan_id] = plan
             
@@ -71,7 +80,23 @@ class Orchestrator:
             logger.info(plan_msg)
             previous_context = {}
             answers = []
-            for step in plan.steps:
+            i = 0
+            while i < len(plan.steps):
+                step = plan.steps[i]
+                # If step_type is 'llm_query', refine it before execution
+                if hasattr(step, 'step_type') and step.step_type == "llm_query":
+                    logger.info(f"Refining step {step.step_id} with LLM (step_type=llm_query)")
+                    # Use planner_client to further decompose/refine this step
+                    refined_plan = planner_client.generate_plan(
+                        query=step.expected_output,
+                        context=previous_context
+                    )
+                    # Replace the llm_query step with its refined steps
+                    plan.steps = plan.steps[:i] + refined_plan.steps + plan.steps[i+1:]
+                    steps_count = len(plan.steps)
+                    # Do not increment i, process the new steps at this index
+                    continue
+                # Only execute 'action' steps
                 result = await self._execute_step(step, previous_context)
                 if result is None:
                     success = await self._handle_step_failure(
@@ -89,19 +114,15 @@ class Orchestrator:
                     # Fallback: if analyze step, format summary as string
                     if not formatted_result and step.tool == "analyze":
                         if isinstance(result, dict) and "data" in result:
-                            # Use pandas/numpy-safe serialization
                             import numpy as np
                             def safe_json(obj):
                                 import pandas as pd
-                                # Handle numpy integer/floating types
                                 if isinstance(obj, (np.integer, np.int64, np.int32)):
                                     return int(obj)
                                 if isinstance(obj, (np.floating, np.float64, np.float32)):
                                     return float(obj)
-                                # Handle numpy dtypes
                                 if isinstance(obj, np.dtype):
                                     return str(obj)
-                                # Handle pandas types
                                 if isinstance(obj, pd.Series):
                                     return obj.tolist()
                                 if isinstance(obj, pd.DataFrame):
@@ -112,6 +133,7 @@ class Orchestrator:
                             formatted_result = json.dumps(result["data"], default=safe_json)
                     if formatted_result:
                         answers.append(str(formatted_result))
+                i += 1
             return answers if answers else ["Processing failed"]
         except Exception as e:
             logger.error(f"Plan execution failed: {str(e)}")
