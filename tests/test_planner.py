@@ -33,12 +33,9 @@ class TestPlannerClient:
                 }
             ]
         }
-        
-        with patch('app.llm_client.llm_client.generate_json_response') as mock_llm:
+        with patch('planner.planner_client.llm_client.generate_json_response') as mock_llm:
             mock_llm.return_value = mock_response
-            
             plan = planner_client.generate_plan("test query")
-            
             assert len(plan.steps) == 1
             assert plan.steps[0].step_id == 1
             assert plan.steps[0].tool == ToolType.FETCH_WEB
@@ -56,13 +53,10 @@ class TestPlannerClient:
                 }
             ]
         }
-        
-        with patch('app.llm_client.llm_client.generate_json_response') as mock_llm:
+        with patch('planner.planner_client.llm_client.generate_json_response') as mock_llm:
             mock_llm.return_value = mock_response
-            
             context = {"files": ["test.csv"]}
             plan = planner_client.generate_plan("analyze data", context)
-            
             assert len(plan.steps) == 1
             assert plan.steps[0].tool == ToolType.LOAD_LOCAL
 
@@ -72,7 +66,6 @@ class TestReplannerClient:
     def test_replan_step_success(self, replanner_client):
         """Test successful step replanning"""
         from app.models import ExecutionPlan
-        
         original_plan = ExecutionPlan(steps=[])
         failed_step = ExecutionStep(
             step_id=1,
@@ -82,7 +75,6 @@ class TestReplannerClient:
             status=StepStatus.FAILED,
             error="Connection timeout"
         )
-        
         mock_response = {
             "steps": [
                 {
@@ -93,14 +85,11 @@ class TestReplannerClient:
                 }
             ]
         }
-        
-        with patch('app.llm_client.llm_client.generate_json_response') as mock_llm:
+        with patch('planner.planner_client.llm_client.generate_json_response') as mock_llm:
             mock_llm.return_value = mock_response
-            
             new_plan = replanner_client.replan_step(
                 original_plan, failed_step, "Connection timeout"
             )
-            
             assert len(new_plan.steps) == 1
             assert new_plan.steps[0].step_id == 2
             assert new_plan.steps[0].tool == ToolType.LOAD_LOCAL

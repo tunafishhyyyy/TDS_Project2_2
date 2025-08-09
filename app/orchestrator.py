@@ -334,7 +334,12 @@ class Orchestrator:
                 # Handle other parameter references
                 step_key = value.replace("output_of_", "")
                 if step_key in context:
-                    resolved[key] = context[step_key]
+                    step_output = context[step_key]
+                    # If step output is a dict with 'data' field, extract it
+                    if isinstance(step_output, dict) and "data" in step_output:
+                        resolved[key] = step_output["data"]
+                    else:
+                        resolved[key] = step_output
                 else:
                     resolved[key] = value
             else:

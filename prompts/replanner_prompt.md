@@ -21,16 +21,16 @@ Available tools:
 
 Response format (JSON only):
 ```json
-{
+{{
   "steps": [
-    {
+    {{
       "step_id": 1,
       "tool": "tool_name", 
-      "params": {"param1": "value1"},
+      "params": {{"param1": "value1"}},
       "expected_output": "Brief description"
-    }
+    }}
   ]
-}
+}}
 ```
 
 Common failure patterns and solutions:

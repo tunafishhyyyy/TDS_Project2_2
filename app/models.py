@@ -1,6 +1,7 @@
 """
 Data Models and Types for the Orchestration Framework
 """
+import time
 from typing import List, Dict, Any, Optional, Union
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -61,6 +62,3 @@ class VerificationResult(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     issues: List[str] = []
     passed: bool
-
-
-import time

@@ -161,5 +161,134 @@ class LLMClient:
         )
 
 
-# Global LLM client instance
+
+# Gemini API integration
+import requests
+
+class GeminiClient:
+    """Google Gemini API client for LLM orchestration"""
+    def __init__(self):
+        self.api_key = getattr(config, "GEMINI_API_KEY", None)
+        # Use the latest Gemini model as default
+        self.model = getattr(config, "GEMINI_MODEL", "gemini-1.0-pro-latest")
+        # Endpoint should not include :generateContent in the format string
+        self.endpoint = getattr(
+            config,
+            "GEMINI_ENDPOINT",
+            "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        )
+
+    def generate_json_response(self, messages: List[Dict[str, str]], temperature: Optional[float] = None) -> Dict[str, Any]:
+        """Generate JSON response from Gemini API"""
+        # Compose prompt from messages
+        prompt = "\n".join([m["content"] for m in messages])
+        url = self.endpoint.format(model=self.model)
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": temperature or 0.2,
+                "maxOutputTokens": 2048
+            }
+        }
+        params = {"key": self.api_key}
+        try:
+            response = requests.post(url, headers=headers, params=params, json=payload, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            # Gemini returns candidates[0]["content"]["parts"][0]["text"]
+            text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+            # Try to parse as JSON
+            try:
+                return json.loads(text)
+            except Exception:
+                logger.error(f"Gemini response not valid JSON: {text}")
+                return {"steps": []}
+        except Exception as e:
+            logger.error(f"Gemini API error: {str(e)}")
+            return {"steps": []}
+
+# Global LLM client instances
+# Hugging Face Inference API integration
+import requests
+
+class HuggingFaceClient:
+    """Hugging Face Inference API client for LLM orchestration"""
+
+    def __init__(self):
+        from app.config import config
+        self.api_token = getattr(config, "HF_API_TOKEN", None)
+        self.model = getattr(config, "HF_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
+        self.api_url = getattr(config, "HF_API_URL", "https://api-inference.huggingface.co/models/")
+
+    def generate_json_response(self, messages, temperature: Optional[float] = None) -> Dict[str, Any]:
+        """Generate JSON response from Hugging Face Inference API"""
+        # Accept either a string or a list of dicts
+        if isinstance(messages, str):
+            inputs = messages
+        elif isinstance(messages, list):
+            # Detect chat-style vs. plain text models
+            is_chat_model = any(
+                name in self.model.lower()
+                for name in ["gpt", "llama", "mistral", "chat"]
+            )
+            if is_chat_model:
+                # Preserve role/content structure
+                inputs = [{"role": m["role"], "content": m["content"]} for m in messages]
+            else:
+                # Fallback to concatenated text
+                inputs = "\n".join([m["content"] for m in messages])
+        else:
+            raise ValueError("messages must be a string or a list of dicts")
+
+        url = f"{self.api_url}{self.model}"
+        headers = {
+            "Authorization": f"Bearer {self.api_token}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "inputs": inputs,
+            "parameters": {
+                "temperature": temperature or 0.2,
+                "max_new_tokens": 512,
+                "return_full_text": False
+            }
+        }
+
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+
+            # Extract generated text from HF response
+            if isinstance(data, list) and data:
+                text = (
+                    data[0].get("generated_text")
+                    or data[0].get("text")
+                    or str(data[0])
+                )
+            elif isinstance(data, dict):
+                text = (
+                    data.get("generated_text")
+                    or data.get("text")
+                    or str(data)
+                )
+            else:
+                text = str(data)
+
+            # Attempt to parse JSON output
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                logger.error(f"Hugging Face response is not valid JSON: {text}")
+                return {"steps": []}
+
+        except Exception as e:
+            logger.error(f"Hugging Face API error: {str(e)}")
+            return {"steps": []}
+
+            
+# Global LLM client instances
 llm_client = LLMClient()
+gemini_client = GeminiClient()
+huggingface_client = HuggingFaceClient()
