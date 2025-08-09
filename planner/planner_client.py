@@ -2,7 +2,7 @@
 Planner module for generating execution plans
 """
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from app.models import ExecutionPlan, ExecutionStep, ToolType, StepStatus
 from app.llm_client import llm_client
 from app.logger import execution_logger_info, llm_logger_info, logger
@@ -15,34 +15,96 @@ class PlannerClient:
         self.prompt_template = self._load_prompt_template()
     
     def _load_prompt_template(self) -> str:
-        """Load the planner prompt template"""
+        """Load prompt template from file"""
         try:
             with open("prompts/planner_prompt.md", "r") as f:
                 return f.read()
         except FileNotFoundError:
-            logger.error("Planner prompt template not found")
             return self._get_default_prompt()
+            
+    def _load_tool_refinement_template(self) -> str:
+        """Load tool refinement prompt template from file"""
+        try:
+            with open("prompts/tool_refinement_prompt.md", "r") as f:
+                return f.read()
+        except FileNotFoundError:
+            return self._get_default_tool_refinement_prompt()
     
     def _get_default_prompt(self) -> str:
-        """Default prompt if template file is missing"""
+        """Default prompt template if file loading fails"""
         return """
-        You are a step-by-step planner for data analysis tasks.
-        Create a JSON plan with steps to answer the user query.
+You are a data analysis task breakdown expert. 
+Break down user queries into atomic tasks.
+Return a JSON array of task description strings.
+        """.strip()
         
-        Response format:
-        {
-          "steps": [
-            {
-              "step_id": 1,
-              "tool": "tool_name",
-              "params": {"param": "value"},
-              "expected_output": "description"
-            }
-          ]
-        }
+    def _get_default_tool_refinement_prompt(self) -> str:
+        """Default tool refinement prompt if file loading fails"""
+        return """
+Convert task descriptions into specific tool calls.
+Available tools: fetch_web, load_local, duckdb_runner, analyze, visualize.
+Return JSON: {"tool": "tool_name", "params": {...}, "reasoning": "..."}
+        """.strip()
+
+    def _refine_tasks_to_tools(self, steps: List[ExecutionStep], context: dict) -> List[ExecutionStep]:
+        """Refine generic task descriptions into specific tool calls using LLM"""
+        refined_steps = []
         
-        User Query: {query}
-        """
+        for step in steps:
+            if step.tool == ToolType.ANALYZE and "task" in step.params:
+                task_description = step.params["task"]
+                logger.info(f"Refining task: {task_description}")
+                
+                try:
+                    # Load tool refinement prompt
+                    refinement_prompt = self._load_tool_refinement_template()
+                    
+                    # Create messages for tool refinement
+                    messages = [
+                        {"role": "system", "content": refinement_prompt},
+                        {"role": "user", "content": f"Task: {task_description}"}
+                    ]
+                    
+                    # Get tool refinement from LLM
+                    response = llm_client.generate_completion(messages, json_mode=True)
+                    logger.info(f"Tool refinement response: {response}")
+                    logger.info(f"Response type: {type(response)}")
+                    
+                    # Parse response if it's a string
+                    if response and isinstance(response, str):
+                        try:
+                            response = json.loads(response)
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Failed to parse JSON response: {e}")
+                            response = None
+                    
+                    if response and isinstance(response, dict):
+                        tool_name = response.get("tool", "analyze")
+                        tool_params = response.get("params", {"task": task_description})
+                        reasoning = response.get("reasoning", "")
+                        
+                        logger.info(f"Refined to tool: {tool_name}, reasoning: {reasoning}")
+                        
+                        # Create refined step
+                        refined_step = ExecutionStep(
+                            step_id=step.step_id,
+                            tool=ToolType(tool_name),
+                            params=tool_params,
+                            expected_output=step.expected_output,
+                            status=StepStatus.PENDING
+                        )
+                        refined_steps.append(refined_step)
+                    else:
+                        logger.warning(f"Tool refinement failed for task: {task_description}")
+                        refined_steps.append(step)  # Keep original
+                        
+                except Exception as e:
+                    logger.error(f"Error refining task '{task_description}': {str(e)}")
+                    refined_steps.append(step)  # Keep original on error
+            else:
+                refined_steps.append(step)  # Keep non-generic steps as-is
+                
+        return refined_steps
     
     def generate_plan_backup(self, query: str, 
                            context: Optional[Dict[str, Any]] = None
@@ -218,6 +280,11 @@ class PlannerClient:
                 error_msg = (f"LLM response has no recognizable format (steps array, "
                            f"single step, or task array): {response_json}")
                 logger.error(error_msg)
+
+        # Refine steps if we have generic analyze steps
+        if steps and all(step.tool == ToolType.ANALYZE and "task" in step.params for step in steps):
+            logger.info("Refining generic tasks into specific tool calls")
+            steps = self._refine_tasks_to_tools(steps, context)
 
         plan = ExecutionPlan(steps=steps)
         plan_str = str(plan)
