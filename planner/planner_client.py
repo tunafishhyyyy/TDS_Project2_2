@@ -70,15 +70,9 @@ class PlannerClient:
                 
                 messages = [
                     {"role": "system", 
-                     "content": ("You are an expert data analysis planner. " +
-                                "Return only valid JSON.")},
-                    {"role": "assistant", 
                      "content": system_prompt},
                     {"role": "user", 
-                     "content": (f"Here is the user's question (from file " +
-                                f"{question_file}):\n\n{question_text}\n\n" +
-                                "Please create a detailed execution plan for " +
-                                "this question.")}
+                     "content": f"Here is the user's question from file {question_file}:\n\n{question_text}"}
                 ]
                 
             except Exception as e:
@@ -115,6 +109,9 @@ class PlannerClient:
         llm_logger_info(log_content, response)
 
         # Parse response
+        logger.info(f"Raw response: {response}")
+        logger.info(f"Response type: {type(response)}")
+        
         if isinstance(response, dict):
             try:
                 response_json = json.loads(json.dumps(response))
@@ -122,9 +119,22 @@ class PlannerClient:
                 error_msg = f"Dict to JSON conversion failed: {str(e)}"
                 execution_logger_info(0, "planner", "failed", error=error_msg)
                 response_json = None
+        elif isinstance(response, list):
+            # Handle direct list response (already parsed by LLM client)
+            response_json = response
         elif isinstance(response, str):
+            # Strip markdown code blocks if present
+            response_clean = response.strip()
+            if response_clean.startswith("```json"):
+                response_clean = response_clean[7:]  # Remove ```json
+            if response_clean.startswith("```"):
+                response_clean = response_clean[3:]   # Remove ```
+            if response_clean.endswith("```"):
+                response_clean = response_clean[:-3]  # Remove closing ```
+            response_clean = response_clean.strip()
+            
             try:
-                response_json = json.loads(response)
+                response_json = json.loads(response_clean)
             except Exception as e:
                 error_msg = f"String to JSON parsing failed: {str(e)}"
                 execution_logger_info(0, "planner", "failed", error=error_msg)
@@ -136,41 +146,78 @@ class PlannerClient:
         steps = []
         if response_json:
             logger.info(f"Processing LLM response: {response_json}")
-            # Handle case where LLM returns correct format with "steps" array
-            if response_json.get("steps"):
-                logger.info("Found 'steps' array in response")
-                step_list = response_json["steps"]
-            # Handle case where LLM returns a single step object (malformed)
-            elif response_json.get("step_id") and response_json.get("tool"):
-                logger.warning("LLM returned single step instead of steps " +
-                              "array, wrapping it")
-                step_list = [response_json]
-            else:
-                error_msg = ("LLM response has no 'steps' array or valid " +
-                            f"step format: {response_json}")
-                logger.error(error_msg)
-                step_list = []
+            logger.info(f"Response type: {type(response_json)}")
             
-            logger.info(f"Processing {len(step_list)} steps")
-            for step_data in step_list:
-                # Use keys from mock response directly, fallback if missing
-                step_id = step_data.get("step_id", len(steps)+1)
-                tool = step_data.get("tool", "analyze")
-                params = step_data.get("params", {})
-                expected_output = step_data.get("expected_output", "")
-                try:
+            # Handle new simple task array format (list of strings)
+            if isinstance(response_json, list) and all(isinstance(task, str) for task in response_json):
+                logger.info(f"Found simple task array with {len(response_json)} tasks")
+                for i, task_description in enumerate(response_json, 1):
+                    # Convert simple task description to ExecutionStep
+                    # For now, default to 'analyze' tool with task description
                     step = ExecutionStep(
-                        step_id=step_id,
-                        tool=ToolType(tool),
-                        params=params,
-                        expected_output=expected_output,
+                        step_id=i,
+                        tool=ToolType("analyze"),
+                        params={"task": task_description},
+                        expected_output=f"Result for: {task_description}",
                         status=StepStatus.PENDING
                     )
                     steps.append(step)
                     execution_logger_info(step.step_id, step.tool, step.status)
-                except Exception as e:
-                    error_msg = f"Step parsing error: {str(e)}"
-                    execution_logger_info(0, "planner", "failed", error=error_msg)
+                    
+            # Handle case where LLM returns correct format with "steps" array
+                    
+            # Handle case where LLM returns correct format with "steps" array
+            elif response_json.get("steps"):
+                logger.info("Found 'steps' array in response")
+                step_list = response_json["steps"]
+                
+                for step_data in step_list:
+                    # Use keys from mock response directly, fallback if missing
+                    step_id = step_data.get("step_id", len(steps)+1)
+                    tool = step_data.get("tool", "analyze")
+                    params = step_data.get("params", {})
+                    expected_output = step_data.get("expected_output", "")
+                    try:
+                        step = ExecutionStep(
+                            step_id=step_id,
+                            tool=ToolType(tool),
+                            params=params,
+                            expected_output=expected_output,
+                            status=StepStatus.PENDING
+                        )
+                        steps.append(step)
+                        execution_logger_info(step.step_id, step.tool, step.status)
+                    except Exception as e:
+                        error_msg = f"Step parsing error: {str(e)}"
+                        execution_logger_info(0, "planner", "failed", error=error_msg)
+                        
+            # Handle case where LLM returns a single step object (malformed)
+            elif response_json.get("step_id") and response_json.get("tool"):
+                logger.warning("LLM returned single step instead of steps array, wrapping it")
+                step_list = [response_json]
+                
+                for step_data in step_list:
+                    step_id = step_data.get("step_id", len(steps)+1)
+                    tool = step_data.get("tool", "analyze")
+                    params = step_data.get("params", {})
+                    expected_output = step_data.get("expected_output", "")
+                    try:
+                        step = ExecutionStep(
+                            step_id=step_id,
+                            tool=ToolType(tool),
+                            params=params,
+                            expected_output=expected_output,
+                            status=StepStatus.PENDING
+                        )
+                        steps.append(step)
+                        execution_logger_info(step.step_id, step.tool, step.status)
+                    except Exception as e:
+                        error_msg = f"Step parsing error: {str(e)}"
+                        execution_logger_info(0, "planner", "failed", error=error_msg)
+            else:
+                error_msg = (f"LLM response has no recognizable format (steps array, "
+                           f"single step, or task array): {response_json}")
+                logger.error(error_msg)
 
         plan = ExecutionPlan(steps=steps)
         plan_str = str(plan)
